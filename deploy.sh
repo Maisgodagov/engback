@@ -10,6 +10,26 @@ echo "🚀 Начинаем развертывание English Backend..."
 # Переходим в директорию проекта
 cd /var/www/english-backend/engback
 
+# Проверяем наличие git репозитория
+if [ ! -d ".git" ]; then
+    echo "❌ Git репозиторий не найден в текущей директории"
+    echo "🔍 Ищем git репозиторий..."
+    
+    # Проверяем родительскую директорию
+    cd /var/www/english-backend
+    if [ -d ".git" ]; then
+        echo "✅ Найден git репозиторий в /var/www/english-backend"
+    elif [ -d "engback/.git" ]; then
+        echo "✅ Найден git репозиторий в /var/www/english-backend/engback"
+        cd engback
+    else
+        echo "❌ Git репозиторий не найден. Клонируем..."
+        echo "❌ Необходимо вручную клонировать репозиторий"
+        echo "Выполните: git clone https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git engback"
+        exit 1
+    fi
+fi
+
 # Получаем последние изменения из репозитория
 echo "📥 Получаем последние изменения..."
 git fetch origin
