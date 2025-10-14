@@ -1,0 +1,41 @@
+{
+  "name": "english-backend",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/server.ts",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.ts",
+    "lint": "eslint .",
+    "prisma:generate": "prisma generate --schema=./prisma/schema.prisma",
+    "prisma:migrate": "prisma migrate dev --schema=./prisma/schema.prisma",
+    "prisma:studio": "prisma studio --schema=./prisma/schema.prisma",
+    "prisma:seed": "ts-node prisma/seed.ts"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.19.2",
+    "helmet": "^8.0.1",
+    "morgan": "^1.10.0",
+    "zod": "^3.23.8",
+    "@prisma/client": "^5.18.0",
+    "bcryptjs": "^2.4.3"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.10",
+    "@types/morgan": "^1.9.9",
+    "@types/bcryptjs": "^2.4.6",
+    "eslint": "^9.9.0",
+    "typescript": "~5.9.2",
+    "ts-node-dev": "^2.0.0",
+    "ts-node": "^10.9.2",
+    "prisma": "^5.18.0"
+  }
+}
