@@ -79,7 +79,7 @@ nano .env
 Добавьте в .env файл:
 ```env
 NODE_ENV=production
-PORT=3001
+PORT=3002
 DATABASE_URL="your_production_database_url"
 JWT_SECRET="your_jwt_secret"
 ```
@@ -121,8 +121,8 @@ cat ~/.ssh/id_rsa
 ### 4. Настройка файрвола (если нужно)
 
 ```bash
-# Открываем порт 3001 для приложения
-sudo ufw allow 3001
+# Открываем порт 3002 для приложения
+sudo ufw allow 3002
 
 # Проверяем статус файрвола
 sudo ufw status
@@ -148,7 +148,7 @@ server {
     server_name your_domain.com;  # замените на ваш домен
 
     location / {
-        proxy_pass http://localhost:3001;
+        proxy_pass http://localhost:3002;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -179,7 +179,7 @@ pm2 status
 pm2 logs english-backend
 
 # Проверяем работу приложения
-curl http://localhost:3001
+curl http://localhost:3002
 ```
 
 #### 6.2 Тестирование автоматического развертывания
