@@ -16,6 +16,6 @@ jobs:
         username: ${{ secrets.USERNAME }}
         password: ${{ secrets.PASSWORD }}
         script: |
-          cd /var/www/english-backend
+          cd /var/www/english-backend/engback
           chmod +x deploy.sh
           ./deploy.sh

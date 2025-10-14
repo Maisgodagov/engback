@@ -25,13 +25,14 @@ ssh your_username@your_server_ip
 # Создаем директорию для проекта
 sudo mkdir -p /var/www/english-backend
 sudo chown $USER:$USER /var/www/english-backend
-cd /var/www/english-backend
+cd /var/www/english-backend/engback
 ```
 
 #### 2.3 Клонирование репозитория
 ```bash
 # Клонируем репозиторий
-git clone https://github.com/your_username/your_repo_name.git .
+git clone https://github.com/your_username/your_repo_name.git engback
+cd engback
 
 # Переключаемся на ветку prod
 git checkout prod
