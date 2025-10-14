@@ -179,7 +179,13 @@ pm2 status
 pm2 logs english-backend
 
 # Проверяем работу приложения
-curl http://localhost:3002
+curl http://localhost:3002/health
+
+# Проверяем API курсов
+curl http://localhost:3002/api/courses
+
+# Проверяем API пользователей
+curl http://localhost:3002/api/users
 ```
 
 #### 6.2 Тестирование автоматического развертывания
