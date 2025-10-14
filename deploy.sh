@@ -35,9 +35,9 @@ echo "📥 Получаем последние изменения..."
 git fetch origin
 git reset --hard origin/prod
 
-# Устанавливаем зависимости
+# Устанавливаем зависимости (включая dev для сборки)
 echo "📦 Устанавливаем зависимости..."
-npm ci --only=production
+npm ci
 
 # Генерируем Prisma клиент
 echo "🔧 Генерируем Prisma клиент..."
@@ -50,6 +50,10 @@ npx prisma migrate deploy
 # Собираем проект
 echo "🏗️ Собираем проект..."
 npm run build
+
+# Удаляем dev зависимости после сборки для экономии места
+echo "🧹 Очищаем dev зависимости..."
+npm prune --production
 
 # Создаем директорию для логов если её нет
 mkdir -p logs
