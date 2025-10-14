@@ -177,7 +177,7 @@ sudo systemctl restart nginx
 pm2 status
 
 # Проверяем логи
-pm2 logs english-backend
+pm2 logs 2
 
 # Проверяем работу приложения
 curl http://localhost:3002/health
@@ -201,17 +201,17 @@ curl http://localhost:3002/api/users
 # Просмотр статуса PM2
 pm2 status
 
-# Просмотр логов
-pm2 logs english-backend
+# Просмотр логов (используя ID)
+pm2 logs 2
 
-# Перезапуск приложения
-pm2 restart english-backend
+# Перезапуск приложения (используя ID)
+pm2 restart 2
 
 # Остановка приложения
-pm2 stop english-backend
+pm2 stop 2
 
 # Удаление приложения из PM2
-pm2 delete english-backend
+pm2 delete 2
 
 # Мониторинг в реальном времени
 pm2 monit
