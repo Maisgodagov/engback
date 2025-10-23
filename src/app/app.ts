@@ -30,6 +30,7 @@ export const createApp = () => {
         if (origin && /^exp:\/\/.*\.exp\.direct$/.test(origin)) return callback(null, true);
         if (origin && /^https:\/\/.*\.exp\.direct$/.test(origin)) return callback(null, true);
         if (origin && /^https:\/\/.*\.expo\.dev$/.test(origin)) return callback(null, true);
+        if (origin === 'https://expo.dev' || origin === 'https://exp.direct') return callback(null, true);
         return callback(new Error('Not allowed by CORS'));
       },
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
