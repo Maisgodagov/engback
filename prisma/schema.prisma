@@ -47,6 +47,7 @@ model User {
   courseProgress   UserCourseProgress[]
   moduleProgress   UserModuleProgress[]
   lessonProgress   UserLessonProgress[]
+  videoLearningProgress VideoLearningProgress[]
 
   @@map("users")
 }
@@ -232,4 +233,106 @@ model UserLessonProgress {
   @@unique([userId, lessonId])
   @@index([lessonId])
   @@map("user_lesson_progress")
+}
+
+enum VideoLearningStatus {
+  NOT_STARTED
+  WATCHED
+  COMPLETED
+}
+
+enum VideoLearningContentCefrLevel {
+  A1
+  A2
+  B1
+  B2
+  C1
+  C2
+
+  @@map("video_learning_content_cefr_level")
+}
+
+enum VideoLearningContentSpeechSpeed {
+  slow
+  normal
+  fast
+
+  @@map("video_learning_content_speech_speed")
+}
+
+enum VideoLearningContentGrammarComplexity {
+  simple
+  intermediate
+  complex
+
+  @@map("video_learning_content_grammar_complexity")
+}
+
+enum VideoLearningContentVocabularyComplexity {
+  basic
+  intermediate
+  advanced
+
+  @@map("video_learning_content_vocabulary_complexity")
+}
+
+enum VideoLearningContentStatus {
+  pending
+  processing
+  completed
+  failed
+
+  @@map("video_learning_content_status")
+}
+
+model VideoLearningContent {
+  id                          Int                                     @id @default(autoincrement())
+  videoName                   String                                  @db.VarChar(255) @map("video_name")
+  videoUrl                    String?                                 @db.VarChar(500) @map("video_url")
+  cefrLevel                   VideoLearningContentCefrLevel           @map("cefr_level")
+  speechSpeed                 VideoLearningContentSpeechSpeed?        @map("speech_speed")
+  grammarComplexity           VideoLearningContentGrammarComplexity?  @map("grammar_complexity")
+  vocabularyComplexity        VideoLearningContentVocabularyComplexity? @map("vocabulary_complexity")
+  topics                      Json                                    @map("topics")
+  transcriptFull              String                                  @db.Text @map("transcript_full")
+  transcriptChunks            Json                                    @map("transcript_chunks")
+  transcriptTranslationFull   String?                                 @db.Text @map("transcript_translation_full")
+  transcriptTranslationChunks Json?                                   @map("transcript_translation_chunks")
+  exercises                   Json                                    @map("exercises")
+  durationSeconds             Int?                                    @map("duration_seconds")
+  audioLevel                  Float?                                  @map("audio_level") // Коэффициент нормализации громкости (0.1-1.0)
+  processedAt                 DateTime?                               @default(now()) @map("processed_at")
+  status                      VideoLearningContentStatus?             @map("status")
+  videoTopics                 VideoTopic[]
+  progressEntries             VideoLearningProgress[]
+
+  @@map("video_learning_content")
+}
+
+model VideoTopic {
+  id        Int                   @id @default(autoincrement())
+  contentId Int                   @map("video_id")
+  topic     String                @db.VarChar(100)
+  content   VideoLearningContent  @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@index([contentId])
+  @@map("video_topics")
+}
+
+model VideoLearningProgress {
+  id        Int                 @id @default(autoincrement())
+  userId    String              @map("user_id")
+  contentId Int                 @map("content_id")
+  status    VideoLearningStatus @default(NOT_STARTED) @map("status")
+  answers   Json?               @map("answers")
+  score     Int?                @map("score")
+  createdAt DateTime            @default(now()) @map("created_at")
+  updatedAt DateTime            @default(now()) @updatedAt @map("updated_at")
+
+  user    User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content VideoLearningContent @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contentId])
+  @@index([contentId])
+  @@map("video_learning_progress")
 }
