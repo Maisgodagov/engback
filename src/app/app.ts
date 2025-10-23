@@ -26,8 +26,10 @@ export const createApp = () => {
         // In production, allow only explicit origins (comma-separated)
         const allowed = (process.env.CORS_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
         if (allowed.length && origin && allowed.includes(origin)) return callback(null, true);
-        // Allow Expo development URLs (exp://*.exp.direct)
-        if (origin && origin.match(/^exp:\/\/.*\.exp\.direct$/)) return callback(null, true);
+        // Allow Expo development URLs (exp://*.exp.direct, https://*.exp.direct, https://*.expo.dev)
+        if (origin && /^exp:\/\/.*\.exp\.direct$/.test(origin)) return callback(null, true);
+        if (origin && /^https:\/\/.*\.exp\.direct$/.test(origin)) return callback(null, true);
+        if (origin && /^https:\/\/.*\.expo\.dev$/.test(origin)) return callback(null, true);
         return callback(new Error('Not allowed by CORS'));
       },
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
