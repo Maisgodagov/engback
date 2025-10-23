@@ -1,4 +1,4 @@
-import { VideoLearningStatus } from '@prisma/client';
+import { Prisma, VideoLearningStatus } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 
 import { prisma } from '../../shared/prisma/prismaClient';
@@ -34,28 +34,66 @@ type ContentRecord = {
 
 const normalizeExercises = (raw: unknown): Exercise[] => {
   if (!Array.isArray(raw)) return [];
+
   return raw.map((item, index) => {
+    const fallbackId = `exercise-${index + 1}-${randomUUID()}`;
+    const fallbackOptions: string[] = [];
+    const fallbackCorrect = 0;
+    const fallbackQuestion = '';
+
     if (item && typeof item === 'object') {
-      const typed = item as Partial<Exercise> & Record<string, unknown>;
-      const id = typeof typed.id === 'string' && typed.id.trim() ? typed.id : `exercise-${index + 1}-${randomUUID()}`;
-      const options = Array.isArray(typed.options) ? typed.options.map(String) : [];
+      const typed = item as Partial<Record<string, unknown>>;
+      const id =
+        typeof typed.id === 'string' && typed.id.trim().length > 0 ? typed.id : fallbackId;
+      const options = Array.isArray(typed.options) ? typed.options.map(String) : fallbackOptions;
       const correct =
-        typeof typed.correctAnswer === 'number' && Number.isInteger(typed.correctAnswer) ? typed.correctAnswer : 0;
+        typeof typed.correctAnswer === 'number' && Number.isInteger(typed.correctAnswer)
+          ? typed.correctAnswer
+          : fallbackCorrect;
+      const question =
+        typeof typed.question === 'string' ? typed.question : fallbackQuestion;
+      const normalizedCorrect =
+        options.length > 0 ? Math.max(0, Math.min(options.length - 1, correct)) : 0;
+      const type = (typed.type as Exercise['type']) ?? 'vocabulary';
+
+      if (type === 'vocabulary') {
+        const word = typeof typed.word === 'string' ? typed.word : '';
+        return {
+          id,
+          type: 'vocabulary',
+          question,
+          options,
+          correctAnswer: normalizedCorrect,
+          word,
+        };
+      }
+
+      if (type === 'topic') {
+        return {
+          id,
+          type: 'topic',
+          question,
+          options,
+          correctAnswer: normalizedCorrect,
+        };
+      }
+
       return {
         id,
-        type: (typed.type as Exercise['type']) ?? 'vocabulary',
-        question: typeof typed.question === 'string' ? typed.question : '',
+        type: 'statementCheck',
+        question,
         options,
-        correctAnswer: options.length ? Math.max(0, Math.min(options.length - 1, correct)) : 0,
-        word: typeof (typed as any).word === 'string' ? (typed as any).word : undefined,
-      } as Exercise;
+        correctAnswer: normalizedCorrect,
+      };
     }
+
     return {
-      id: `exercise-${index + 1}-${randomUUID()}`,
+      id: fallbackId,
       type: 'vocabulary',
-      question: '',
-      options: [],
-      correctAnswer: 0,
+      question: fallbackQuestion,
+      options: fallbackOptions,
+      correctAnswer: fallbackCorrect,
+      word: '',
     };
   });
 };
@@ -161,37 +199,34 @@ const getFeed = async (
     orderBy: { id: 'asc' },
   });
 
-  const sortedByStatus = allContents
-    .map((record) => {
-      const status = progressMap.get(record.id) ?? VideoLearningStatus.NOT_STARTED;
-      return {
-        status,
-        record,
-      };
-    })
-    .sort((a, b) => {
-      const weightDiff = statusWeight(a.status) - statusWeight(b.status);
-      if (weightDiff !== 0) {
-        return weightDiff;
-      }
-      return a.record.id - b.record.id;
-    });
+  const processed = allContents.map((record) => {
+    const processedVideo = mapContentRecord(record as ContentRecord);
+    const status = progressMap.get(record.id) ?? VideoLearningStatus.NOT_STARTED;
+    return {
+      rawId: record.id,
+      status,
+      processed: processedVideo,
+    };
+  });
 
-  const feedItems: VideoFeedItem[] = sortedByStatus.map(({ record, status }) => ({
-    id: record.id.toString(),
-    videoName: record.videoName,
-    videoUrl: record.videoUrl ?? '',
-    durationSeconds: record.durationSeconds,
-    audioLevel: record.audioLevel ?? undefined,
-    analysis: {
-      cefrLevel: (record.cefrLevel as AnalysisResult['cefrLevel']) ?? 'A1',
-      speechSpeed: (record.speechSpeed as AnalysisResult['speechSpeed']) ?? 'normal',
-      grammarComplexity: (record.grammarComplexity as AnalysisResult['grammarComplexity']) ?? 'simple',
-      vocabularyComplexity: (record.vocabularyComplexity as AnalysisResult['vocabularyComplexity']) ?? 'basic',
-      topics: mapTopics(record.topics),
-    },
+  const sortedByStatus = processed.sort((a, b) => {
+    const weightDiff = statusWeight(a.status) - statusWeight(b.status);
+    if (weightDiff !== 0) {
+      return weightDiff;
+    }
+    // Fall back to original numeric IDs to keep deterministic order
+    return a.rawId - b.rawId;
+  });
+
+  const feedItems: VideoFeedItem[] = sortedByStatus.map(({ processed: item, status }) => ({
+    id: item.id,
+    videoName: item.videoName,
+    videoUrl: item.videoUrl,
+    durationSeconds: item.durationSeconds,
+    audioLevel: item.audioLevel,
+    analysis: item.analysis,
     status,
-    createdAt: (record.processedAt ?? new Date()).toISOString(),
+    createdAt: item.createdAt,
   }));
 
   let startIndex = 0;
@@ -299,11 +334,16 @@ const submitProgress = async (
 
   const mapped = mapContentRecord(record as ContentRecord);
   const exercises = mapped.exercises;
+
+  const serializeAnswers = (input: SubmitExerciseAnswer[]): Prisma.JsonArray =>
+    input.map((item) => ({ ...item })) as unknown as Prisma.JsonArray;
+
   if (!exercises.length) {
+    const emptyAnswers = serializeAnswers([]);
     await prisma.videoLearningProgress.upsert({
       where: { userId_contentId: { userId, contentId: numericContentId } },
-      update: { status: VideoLearningStatus.COMPLETED, answers: [], score: exercises.length },
-      create: { userId, contentId: numericContentId, status: VideoLearningStatus.COMPLETED, answers: [], score: exercises.length },
+      update: { status: VideoLearningStatus.COMPLETED, answers: emptyAnswers, score: exercises.length },
+      create: { userId, contentId: numericContentId, status: VideoLearningStatus.COMPLETED, answers: emptyAnswers, score: exercises.length },
     });
     return {
       total: 0,
@@ -327,19 +367,20 @@ const submitProgress = async (
   }
 
   const completed = incorrect.length === 0;
+  const serializedAnswers = serializeAnswers(answers);
 
   await prisma.videoLearningProgress.upsert({
     where: { userId_contentId: { userId, contentId: numericContentId } },
     update: {
       status: completed ? VideoLearningStatus.COMPLETED : VideoLearningStatus.WATCHED,
-      answers,
+      answers: serializedAnswers,
       score: correctCount,
     },
     create: {
       userId,
       contentId: numericContentId,
       status: completed ? VideoLearningStatus.COMPLETED : VideoLearningStatus.WATCHED,
-      answers,
+      answers: serializedAnswers,
       score: correctCount,
     },
   });
