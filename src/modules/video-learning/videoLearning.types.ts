@@ -10,10 +10,16 @@ export interface TranscriptChunk {
   timestamp: Timestamp;
 }
 
+export interface TranscriptWordChunk {
+  text: string;
+  timestamp: Timestamp;
+}
+
 export interface TranscriptionResult {
   fullText: string;
   text: string;
   chunks: TranscriptChunk[];
+  wordChunks: TranscriptWordChunk[];
 }
 
 export type TranslationResult = TranscriptionResult;
@@ -61,8 +67,30 @@ export interface ProcessedVideo {
   translation: TranslationResult;
   analysis: AnalysisResult;
   exercises: Exercise[];
+  likesCount: number;
+  isLiked: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PhraseSnippet {
+  id: string;
+  contentId: string;
+  videoName: string;
+  videoUrl: string;
+  startSeconds: number;
+  endSeconds: number;
+  matchedText: string;
+  contextText: string;
+  phrase: string;
+  durationSeconds: number | null;
+  audioLevel?: number;
+}
+
+export interface PhraseSearchResult {
+  items: PhraseSnippet[];
+  phrase: string;
+  returned: number;
 }
 
 export interface VideoFeedItem {
@@ -73,10 +101,17 @@ export interface VideoFeedItem {
   audioLevel?: number; // Коэффициент нормализации громкости (0.1-1.0)
   analysis: AnalysisResult;
   status: 'NOT_STARTED' | 'WATCHED' | 'COMPLETED';
+  likesCount: number;
+  isLiked: boolean;
   createdAt: string;
 }
 
 export interface SubmitExerciseAnswer {
   exerciseId: string;
   selectedOption: number;
+}
+
+export interface LikeStatus {
+  likesCount: number;
+  isLiked: boolean;
 }

@@ -10,6 +10,10 @@ import type {
   TranscriptionResult,
   TranslationResult,
   VideoFeedItem,
+  TranscriptWordChunk,
+  PhraseSnippet,
+  PhraseSearchResult,
+  LikeStatus,
 } from './videoLearning.types';
 
 type ContentRecord = {
@@ -23,6 +27,7 @@ type ContentRecord = {
   topics: unknown;
   transcriptFull: string;
   transcriptChunks: unknown;
+  transcript_word_chunks: unknown;
   transcriptTranslationFull: string | null;
   transcriptTranslationChunks: unknown;
   exercises: unknown;
@@ -30,6 +35,149 @@ type ContentRecord = {
   audioLevel: number | null;
   processedAt: Date | null;
   status: string | null;
+  likesCount: number | null;
+};
+
+const parseChunkArray = (value: unknown): TranscriptWordChunk[] => {
+  if (!Array.isArray(value)) return [];
+
+  return (value as unknown[]).map((chunk) => {
+    if (!chunk || typeof chunk !== 'object') {
+      return { text: '', timestamp: [0, 0] as [number, number] };
+    }
+    const candidate = chunk as Record<string, unknown>;
+    const timestampValue = candidate.timestamp;
+    const rawStart = Array.isArray(timestampValue) ? Number(timestampValue[0]) : Number(candidate.start);
+    const rawEnd = Array.isArray(timestampValue) ? Number(timestampValue[1]) : Number(candidate.end);
+    const start = Number.isFinite(rawStart) && rawStart >= 0 ? rawStart : 0;
+    const end = Number.isFinite(rawEnd) && rawEnd >= start ? rawEnd : start;
+    return {
+      text: typeof candidate.text === 'string' ? candidate.text : '',
+      timestamp: [start, end] as [number, number],
+    };
+  });
+};
+
+const normalizeToken = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/\u2019/g, "'")
+    .replace(/[^a-z0-9']+/g, '');
+
+const formatChunksText = (chunks: TranscriptWordChunk[]): string => {
+  if (!chunks.length) return '';
+  const joined = chunks.map((chunk) => chunk.text).join(' ').replace(/\s+([.,!?;:])/g, '$1');
+  return joined.trim();
+};
+
+const buildContextText = (
+  chunks: TranscriptWordChunk[],
+  startIndex: number,
+  endIndex: number,
+  windowSize = 4,
+): string => {
+  if (!chunks.length) return '';
+  const from = Math.max(0, startIndex - windowSize);
+  const to = Math.min(chunks.length, endIndex + windowSize + 1);
+  return formatChunksText(chunks.slice(from, to));
+};
+
+type PhraseMatch = {
+  startIndex: number;
+  endIndex: number;
+};
+
+const DEFAULT_SNIPPET_LIMIT = 10;
+const MAX_SNIPPET_LIMIT = 50;
+const CONTEXT_WINDOW = 4;
+const MATCH_PADDING_SECONDS = 1;
+const RECORD_FETCH_MULTIPLIER = 3;
+
+const findPhraseMatches = (
+  wordChunks: TranscriptWordChunk[],
+  normalizedTokens: string[],
+): PhraseMatch[] => {
+  if (!wordChunks.length || !normalizedTokens.length) return [];
+
+  const searchable = wordChunks
+    .map((chunk, index) => ({
+      index,
+      normalized: normalizeToken(chunk.text),
+    }))
+    .filter((item) => item.normalized.length > 0);
+
+  if (!searchable.length) return [];
+
+  const matches: PhraseMatch[] = [];
+  const phraseLength = normalizedTokens.length;
+
+  for (let i = 0; i <= searchable.length - phraseLength; i += 1) {
+    let isMatch = true;
+    for (let j = 0; j < phraseLength; j += 1) {
+      const candidate = searchable[i + j];
+      if (!candidate || candidate.normalized !== normalizedTokens[j]) {
+        isMatch = false;
+        break;
+      }
+    }
+    if (isMatch) {
+      const startIndex = searchable[i].index;
+      const endIndex = searchable[i + phraseLength - 1].index;
+      matches.push({ startIndex, endIndex });
+      i += phraseLength - 1;
+    }
+  }
+
+  return matches;
+};
+
+const sanitizeSnippetLimit = (limit?: number): number => {
+  if (!Number.isFinite(limit ?? Number.NaN)) return DEFAULT_SNIPPET_LIMIT;
+  const coerced = Math.trunc(limit as number);
+  if (Number.isNaN(coerced) || coerced <= 0) return DEFAULT_SNIPPET_LIMIT;
+  return Math.min(coerced, MAX_SNIPPET_LIMIT);
+};
+
+const adjustTopicPreferences = async (
+  tx: Prisma.TransactionClient,
+  userId: string,
+  contentId: number,
+  delta: number,
+) => {
+  const topics = await tx.videoTopic.findMany({
+    where: { contentId },
+    select: { topic: true },
+  });
+
+  if (!topics.length) return;
+
+  await Promise.all(
+    topics.map(async ({ topic }) => {
+      if (delta > 0) {
+        await tx.videoTopicPreference.upsert({
+          where: { userId_topic: { userId, topic } },
+          update: { likes: { increment: delta } },
+          create: { userId, topic, likes: delta },
+        });
+      } else {
+        const existing = await tx.videoTopicPreference.findUnique({
+          where: { userId_topic: { userId, topic } },
+        });
+        if (!existing) return;
+        if (existing.likes + delta <= 0) {
+          await tx.videoTopicPreference.delete({
+            where: { userId_topic: { userId, topic } },
+          });
+        } else {
+          await tx.videoTopicPreference.update({
+            where: { userId_topic: { userId, topic } },
+            data: { likes: existing.likes + delta },
+          });
+        }
+      }
+    }),
+  );
 };
 
 const normalizeExercises = (raw: unknown): Exercise[] => {
@@ -111,37 +259,33 @@ const mapTopics = (value: unknown): string[] => {
   return [];
 };
 
-const mapTranscription = (fullText: string, chunksValue: unknown): TranscriptionResult => {
-  const chunks = Array.isArray(chunksValue)
-    ? (chunksValue as unknown[]).map((chunk) => {
-        if (!chunk || typeof chunk !== 'object') {
-          return { text: '', timestamp: [0, 0] as [number, number] };
-        }
-        const candidate = chunk as Record<string, unknown>;
-        const timestampValue = candidate.timestamp;
-        const timestamp =
-          Array.isArray(timestampValue) && timestampValue.length === 2
-            ? ([Number(timestampValue[0]) || 0, Number(timestampValue[1]) || 0] as [number, number])
-            : ([0, 0] as [number, number]);
-        return {
-          text: typeof candidate.text === 'string' ? candidate.text : '',
-          timestamp,
-        };
-      })
-    : [];
+const mapTranscription = (
+  fullText: string,
+  chunksValue: unknown,
+  wordChunksValue: unknown,
+): TranscriptionResult => {
+  const chunks = parseChunkArray(chunksValue);
+  const wordChunks = parseChunkArray(wordChunksValue);
 
   return {
     fullText: fullText ?? '',
     text: fullText ?? '',
     chunks,
+    wordChunks: wordChunks.length ? wordChunks : chunks,
   };
 };
 
-const mapTranslation = (fullText: string | null, chunksValue: unknown): TranslationResult =>
-  mapTranscription(fullText ?? '', chunksValue);
+const mapTranslation = (fullText: string | null, chunksValue: unknown): TranslationResult => ({
+  ...mapTranscription(fullText ?? '', chunksValue, []),
+  wordChunks: [],
+});
 
-const mapContentRecord = (record: ContentRecord): ProcessedVideo => {
-  const transcription = mapTranscription(record.transcriptFull ?? '', record.transcriptChunks);
+const mapContentRecord = (record: ContentRecord, isLiked = false): ProcessedVideo => {
+  const transcription = mapTranscription(
+    record.transcriptFull ?? '',
+    record.transcriptChunks,
+    record.transcript_word_chunks,
+  );
   const translation = mapTranslation(record.transcriptTranslationFull, record.transcriptTranslationChunks);
   const analysis: AnalysisResult = {
     cefrLevel: (record.cefrLevel as AnalysisResult['cefrLevel']) ?? 'A1',
@@ -155,107 +299,323 @@ const mapContentRecord = (record: ContentRecord): ProcessedVideo => {
   return {
     id: record.id.toString(),
     videoName: record.videoName,
-    videoUrl: record.videoUrl ?? '',
+    videoUrl: typeof record.videoUrl === 'string' ? record.videoUrl : '',
     durationSeconds: record.durationSeconds,
     audioLevel: record.audioLevel ?? undefined,
     transcription,
     translation,
     analysis,
     exercises,
+    likesCount: record.likesCount ?? 0,
+    isLiked,
     createdAt: (record.processedAt ?? new Date()).toISOString(),
     updatedAt: (record.processedAt ?? new Date()).toISOString(),
   };
 };
 
-const statusWeight = (status: VideoLearningStatus | null | undefined): number => {
-  switch (status) {
-    case VideoLearningStatus.NOT_STARTED:
-      return 0;
-    case VideoLearningStatus.WATCHED:
-      return 1;
-    case VideoLearningStatus.COMPLETED:
-      return 2;
-    default:
-      return 3;
+const computeRecommendationScores = async (
+  userId: string,
+  excludeIds: Set<number>,
+) => {
+  const [likedRecords, topicPreferences, progressRecords] = await Promise.all([
+    prisma.videoLike.findMany({
+      where: { userId },
+      select: { contentId: true },
+    }),
+    prisma.videoTopicPreference.findMany({
+      where: { userId },
+      select: { topic: true, likes: true },
+    }),
+    prisma.videoLearningProgress.findMany({
+      where: { userId },
+      select: {
+        contentId: true,
+        status: true,
+        content: {
+          select: {
+            id: true,
+            videoTopics: {
+              select: { topic: true },
+            },
+          },
+        },
+      },
+    }),
+  ]);
+
+  const likedSet = new Set(likedRecords.map((item) => item.contentId));
+  const topicScoreMap = new Map(topicPreferences.map((item) => [item.topic, item.likes]));
+  const watchedSet = new Set<number>();
+  const statusMap = new Map<number, VideoLearningStatus>();
+
+  for (const record of progressRecords) {
+    watchedSet.add(record.contentId);
+    statusMap.set(record.contentId, record.status);
+    if (!likedSet.has(record.contentId)) {
+      for (const topicEntry of record.content.videoTopics) {
+        const current = topicScoreMap.get(topicEntry.topic) ?? 0;
+        topicScoreMap.set(topicEntry.topic, current - 1);
+      }
+    }
   }
+
+  const candidateRecords = await prisma.videoLearningContent.findMany({
+    include: {
+      videoTopics: {
+        select: { topic: true },
+      },
+    },
+  });
+
+  const scored = candidateRecords
+    .filter((record) => !excludeIds.has(record.id))
+    .map((record) => {
+      const topics = record.videoTopics.map((topic) => topic.topic);
+      const topicScore = topics.reduce((sum, topic) => sum + (topicScoreMap.get(topic) ?? 0), 0);
+      const popularityScore = Math.log10((record.likesCount ?? 0) + 1);
+      const likedBoost = likedSet.has(record.id) ? 30 : 0;
+      const watchedPenalty = watchedSet.has(record.id) ? 25 : 0;
+
+      const score = topicScore * 12 + popularityScore * 5 + likedBoost - watchedPenalty;
+
+      return {
+        record,
+        score,
+        isWatched: watchedSet.has(record.id),
+      };
+    });
+
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if ((b.record.likesCount ?? 0) !== (a.record.likesCount ?? 0)) {
+      return (b.record.likesCount ?? 0) - (a.record.likesCount ?? 0);
+    }
+    return a.record.id - b.record.id;
+  });
+
+  const unwatched = scored.filter((item) => !item.isWatched);
+  const watched = scored.filter((item) => item.isWatched);
+
+  return { likedSet, statusMap, unwatched, watched };
 };
 
 const getFeed = async (
-  userId?: string | null,
+  userId: string,
   limit?: number,
-  cursor?: string | null
+  cursor?: string | null,
 ): Promise<{ items: VideoFeedItem[]; nextCursor: string | null; hasMore: boolean }> => {
-  const normalizedLimit = limit && limit > 0 ? limit : undefined;
+  const normalizedLimit = limit && limit > 0 ? limit : 1;
 
-  const progress = userId
-    ? await prisma.videoLearningProgress.findMany({
-        where: { userId },
-      })
-    : [];
-
-  const progressMap = new Map(progress.map((item) => [item.contentId, item.status]));
-
-  const allContents = await prisma.videoLearningContent.findMany({
-    orderBy: { id: 'asc' },
-  });
-
-  const processed = allContents.map((record) => {
-    const processedVideo = mapContentRecord(record as ContentRecord);
-    const status = progressMap.get(record.id) ?? VideoLearningStatus.NOT_STARTED;
-    return {
-      rawId: record.id,
-      status,
-      processed: processedVideo,
-    };
-  });
-
-  const sortedByStatus = processed.sort((a, b) => {
-    const weightDiff = statusWeight(a.status) - statusWeight(b.status);
-    if (weightDiff !== 0) {
-      return weightDiff;
-    }
-    // Fall back to original numeric IDs to keep deterministic order
-    return a.rawId - b.rawId;
-  });
-
-  const feedItems: VideoFeedItem[] = sortedByStatus.map(({ processed: item, status }) => ({
-    id: item.id,
-    videoName: item.videoName,
-    videoUrl: item.videoUrl,
-    durationSeconds: item.durationSeconds,
-    audioLevel: item.audioLevel,
-    analysis: item.analysis,
-    status,
-    createdAt: item.createdAt,
-  }));
-
-  let startIndex = 0;
+  const excludeIds = new Set<number>();
   if (cursor) {
-    const cursorIndex = feedItems.findIndex((item) => item.id === cursor);
-    if (cursorIndex >= 0) {
-      startIndex = cursorIndex + 1;
-    }
+    cursor
+      .split(',')
+      .map((value) => Number.parseInt(value.trim(), 10))
+      .filter((value) => Number.isInteger(value) && value > 0)
+      .forEach((value) => excludeIds.add(value));
   }
 
-  const sliceFromCursor = feedItems.slice(startIndex);
+  const { likedSet, statusMap, unwatched, watched } = await computeRecommendationScores(userId, excludeIds);
 
-  if (!normalizedLimit) {
+  const combined = [...unwatched, ...watched];
+  if (!combined.length) {
+    return { items: [], nextCursor: null, hasMore: false };
+  }
+
+  const selected = combined.slice(0, normalizedLimit);
+  const hasMore = combined.length > normalizedLimit;
+
+  const items: VideoFeedItem[] = selected.map(({ record }) => {
+    const { videoTopics: _topics, ...rest } = record;
+    const processed = mapContentRecord(rest as ContentRecord, likedSet.has(record.id));
     return {
-      items: sliceFromCursor,
-      nextCursor: null,
-      hasMore: false,
+      id: processed.id,
+      videoName: processed.videoName,
+      videoUrl: processed.videoUrl,
+      durationSeconds: processed.durationSeconds,
+      audioLevel: processed.audioLevel,
+      analysis: processed.analysis,
+      status: statusMap.get(record.id) ?? VideoLearningStatus.NOT_STARTED,
+      likesCount: processed.likesCount,
+      isLiked: processed.isLiked,
+      createdAt: processed.createdAt,
     };
+  });
+
+  const nextCursorSet = new Set<number>(excludeIds);
+  for (const item of selected) {
+    nextCursorSet.add(item.record.id);
   }
 
-  const limitedItems = sliceFromCursor.slice(0, normalizedLimit);
-  const hasMore = sliceFromCursor.length > limitedItems.length;
-  const nextCursor = hasMore ? limitedItems[limitedItems.length - 1]?.id ?? null : null;
+  const nextCursor =
+    hasMore && nextCursorSet.size > 0 ? Array.from(nextCursorSet).sort((a, b) => a - b).join(',') : null;
 
   return {
-    items: limitedItems,
+    items,
     nextCursor,
     hasMore,
   };
+};
+
+const searchPhrase = async (phrase: string, limit?: number): Promise<PhraseSearchResult> => {
+  const trimmed = (phrase ?? '').trim();
+  if (!trimmed) {
+    return { phrase: '', items: [], returned: 0 };
+  }
+
+  const tokens = trimmed
+    .split(/\s+/)
+    .map(normalizeToken)
+    .filter((token) => token.length > 0);
+
+  if (!tokens.length) {
+    return { phrase: trimmed, items: [], returned: 0 };
+  }
+
+  const snippetsLimit = sanitizeSnippetLimit(limit);
+  const fetchTake = Math.max(snippetsLimit * RECORD_FETCH_MULTIPLIER, snippetsLimit);
+
+  const candidates = await prisma.videoLearningContent.findMany({
+    where: {
+      transcriptFull: {
+        contains: trimmed,
+      },
+    },
+    select: {
+      id: true,
+      videoName: true,
+      videoUrl: true,
+      transcriptFull: true,
+      transcript_word_chunks: true,
+      durationSeconds: true,
+      audioLevel: true,
+    },
+    orderBy: {
+      processedAt: 'desc',
+    },
+    take: fetchTake,
+  });
+
+  const snippets: PhraseSnippet[] = [];
+
+  for (const record of candidates) {
+    if (!record.videoUrl) continue;
+
+    const wordChunks = parseChunkArray(record.transcript_word_chunks);
+    if (!wordChunks.length) continue;
+
+    const matches = findPhraseMatches(wordChunks, tokens);
+    if (!matches.length) continue;
+
+    for (const match of matches) {
+      const matchedWordChunks = wordChunks.slice(match.startIndex, match.endIndex + 1);
+      if (!matchedWordChunks.length) continue;
+
+      const startTimestamp = matchedWordChunks[0].timestamp[0];
+      const endTimestamp = matchedWordChunks[matchedWordChunks.length - 1].timestamp[1];
+      const startSeconds = Math.max(0, startTimestamp - MATCH_PADDING_SECONDS);
+      const rawEnd = endTimestamp + MATCH_PADDING_SECONDS;
+      const duration =
+        typeof record.durationSeconds === 'number' && Number.isFinite(record.durationSeconds)
+          ? record.durationSeconds
+          : null;
+      const endSeconds = duration !== null ? Math.min(rawEnd, duration) : rawEnd;
+      const safeEnd = endSeconds > startSeconds ? endSeconds : startSeconds + MATCH_PADDING_SECONDS;
+      const snippetId = `${record.id}-${match.startIndex}-${match.endIndex}`;
+      const matchedText = formatChunksText(matchedWordChunks);
+      const contextText = buildContextText(wordChunks, match.startIndex, match.endIndex, CONTEXT_WINDOW);
+
+      snippets.push({
+        id: snippetId,
+        contentId: record.id.toString(),
+        videoName: record.videoName,
+        videoUrl: typeof record.videoUrl === 'string' ? record.videoUrl : '',
+        startSeconds,
+        endSeconds: safeEnd,
+        matchedText,
+        contextText,
+        phrase: trimmed,
+        durationSeconds: duration,
+        audioLevel:
+          typeof record.audioLevel === 'number' && Number.isFinite(record.audioLevel)
+            ? record.audioLevel
+            : undefined,
+      });
+
+      if (snippets.length >= snippetsLimit) {
+        return { phrase: trimmed, items: snippets.slice(0, snippetsLimit), returned: snippetsLimit };
+      }
+    }
+  }
+
+  const returned = Math.min(snippets.length, snippetsLimit);
+  return { phrase: trimmed, items: snippets.slice(0, snippetsLimit), returned };
+};
+
+const updateLikeStatus = async (userId: string, contentId: string, like: boolean): Promise<LikeStatus> => {
+  const numericContentId = Number(contentId);
+  if (!Number.isInteger(numericContentId)) {
+    throw Object.assign(new Error('Invalid content identifier'), { status: 400 });
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.videoLike.findUnique({
+      where: { userId_contentId: { userId, contentId: numericContentId } },
+    });
+
+    if (like) {
+      if (!existing) {
+        await tx.videoLike.create({
+          data: {
+            userId,
+            contentId: numericContentId,
+          },
+        });
+        await tx.videoLearningContent.update({
+          where: { id: numericContentId },
+          data: { likesCount: { increment: 1 } },
+        });
+        await adjustTopicPreferences(tx, userId, numericContentId, 1);
+      }
+      const updated = await tx.videoLearningContent.findUnique({
+        where: { id: numericContentId },
+        select: { likesCount: true },
+      });
+      return {
+        likesCount: updated?.likesCount ?? 0,
+        isLiked: true,
+      };
+    }
+
+    if (existing) {
+      await tx.videoLike.delete({
+        where: { userId_contentId: { userId, contentId: numericContentId } },
+      });
+      await tx.videoLearningContent.update({
+        where: { id: numericContentId },
+        data: { likesCount: { decrement: 1 } },
+      });
+      await adjustTopicPreferences(tx, userId, numericContentId, -1);
+    }
+    const updated = await tx.videoLearningContent.findUnique({
+      where: { id: numericContentId },
+      select: { likesCount: true },
+    });
+    if ((updated?.likesCount ?? 0) < 0) {
+      await tx.videoLearningContent.update({
+        where: { id: numericContentId },
+        data: { likesCount: 0 },
+      });
+      return {
+        likesCount: 0,
+        isLiked: false,
+      };
+    }
+    return {
+      likesCount: updated?.likesCount ?? 0,
+      isLiked: false,
+    };
+  });
 };
 
 const getContentById = async (id: string, userId?: string | null): Promise<ProcessedVideo | null> => {
@@ -269,6 +629,8 @@ const getContentById = async (id: string, userId?: string | null): Promise<Proce
   if (!record) {
     return null;
   }
+
+  let likedByUser = false;
 
   if (userId) {
     try {
@@ -311,9 +673,19 @@ const getContentById = async (id: string, userId?: string | null): Promise<Proce
       // Ignore unique constraint errors from race conditions
       console.log('[VideoLearning] Progress update skipped due to race condition');
     }
+
+    const likeRecord = await prisma.videoLike.findUnique({
+      where: {
+        userId_contentId: {
+          userId,
+          contentId: numericId,
+        },
+      },
+    });
+    likedByUser = Boolean(likeRecord);
   }
 
-  return mapContentRecord(record as ContentRecord);
+  return mapContentRecord(record as ContentRecord, likedByUser);
 };
 
 const submitProgress = async (
@@ -395,6 +767,11 @@ const submitProgress = async (
 
 export const videoLearningService = {
   getFeed,
+  searchPhrase,
   getContentById,
+  updateLikeStatus,
   submitProgress,
 };
+
+
+

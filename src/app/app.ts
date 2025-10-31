@@ -24,8 +24,13 @@ export const createApp = () => {
         // In development reflect any origin for ease of local testing
         if (!origin || process.env.NODE_ENV !== 'production') return callback(null, true);
         // In production, allow only explicit origins (comma-separated)
-        const allowed = (process.env.CORS_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
-        if (allowed.length && origin && allowed.includes(origin)) return callback(null, true);
+        const configuredOrigins = (process.env.CORS_ORIGIN || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const defaultLocalOrigins = ['http://localhost:8081', 'http://127.0.0.1:8081'];
+        const allowedOrigins = new Set([...configuredOrigins, ...defaultLocalOrigins]);
+        if (allowedOrigins.size && origin && allowedOrigins.has(origin)) return callback(null, true);
         // Allow Expo development URLs (exp://*.exp.direct, https://*.exp.direct, https://*.expo.dev)
         if (origin && /^exp:\/\/.*\.exp\.direct$/.test(origin)) return callback(null, true);
         if (origin && /^https:\/\/.*\.exp\.direct$/.test(origin)) return callback(null, true);

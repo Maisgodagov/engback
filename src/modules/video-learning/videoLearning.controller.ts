@@ -1,7 +1,12 @@
 import type { Request, Response } from 'express';
 
 import { videoLearningService } from './videoLearning.service';
-import { contentIdParamSchema, submitProgressSchema } from './videoLearning.schemas';
+import {
+  contentIdParamSchema,
+  submitProgressSchema,
+  phraseSearchQuerySchema,
+  updateLikeSchema,
+} from './videoLearning.schemas';
 
 const getUserId = (req: Request): string | null => {
   const header = req.header('x-user-id');
@@ -23,6 +28,16 @@ export const getFeed = async (req: Request, res: Response) => {
   const cursor = req.query.cursor ? (req.query.cursor as string) : undefined;
 
   const result = await videoLearningService.getFeed(userId, limit, cursor);
+  res.json(result);
+};
+
+export const searchPhrase = async (req: Request, res: Response) => {
+  const query = phraseSearchQuerySchema.parse({
+    phrase: req.query.phrase,
+    limit: req.query.limit,
+  });
+
+  const result = await videoLearningService.searchPhrase(query.phrase, query.limit);
   res.json(result);
 };
 
@@ -60,4 +75,16 @@ export const submitProgress = async (req: Request, res: Response) => {
     result,
     nextContentId,
   });
+};
+
+export const updateLike = async (req: Request, res: Response) => {
+  const userId = getUserId(req);
+  if (!userId) {
+    res.status(401).json({ message: 'Missing user identifier' });
+    return;
+  }
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const payload = updateLikeSchema.parse(req.body);
+  const result = await videoLearningService.updateLikeStatus(userId, params.id, payload.like);
+  res.json(result);
 };

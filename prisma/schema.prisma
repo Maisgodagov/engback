@@ -7,47 +7,26 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum UserRole {
-  student
-  teacher
-  admin
-}
-
-enum ProgressStatus {
-  NOT_STARTED
-  IN_PROGRESS
-  COMPLETED
-}
-
-enum DifficultyLevel {
-  ZERO  // Нулевой уровень
-  A1
-  A2
-  B1
-  B2
-  C1
-  C2
-}
-
 model User {
-  id               String              @id @default(cuid())
-  email            String              @unique
-  fullName         String
-  role             UserRole            @default(student)
-  avatarUrl        String?             @db.VarChar(512)
-  streakDays       Int                 @default(0)
-  completedLessons Int                 @default(0)
-  level            String              @default("A1")
-  passwordHash     String              @db.VarChar(255)
-  createdAt        DateTime            @default(now())
-  updatedAt        DateTime            @default(now()) @updatedAt
-  xpPoints         Int                 @default(0)
-  words            UserWord[]
-  preference       UserPreference?
-  courseProgress   UserCourseProgress[]
-  moduleProgress   UserModuleProgress[]
-  lessonProgress   UserLessonProgress[]
+  id                    String                  @id @default(cuid())
+  email                 String                  @unique
+  fullName              String
+  role                  UserRole                @default(student)
+  avatarUrl             String?                 @db.VarChar(512)
+  streakDays            Int                     @default(0)
+  completedLessons      Int                     @default(0)
+  level                 String                  @default("A1")
+  passwordHash          String                  @db.VarChar(255)
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @default(now()) @updatedAt
+  xpPoints              Int                     @default(0)
+  courseProgress        UserCourseProgress[]
+  lessonProgress        UserLessonProgress[]
+  moduleProgress        UserModuleProgress[]
+  words                 UserWord[]
   videoLearningProgress VideoLearningProgress[]
+  videoLikes            VideoLike[]
+  videoTopicPreferences VideoTopicPreference[]
 
   @@map("users")
 }
@@ -76,7 +55,6 @@ model UserPreference {
   theme     String   @db.VarChar(16)
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_preferences")
 }
@@ -89,33 +67,29 @@ model UserStreak {
   @@map("user_streaks")
 }
 
-// === КУРСЫ ===
 model Course {
-  id            String              @id @default(cuid())
-  title         String              @db.VarChar(255)
-  description   String?             @db.Text
-  imageUrl      String?             @db.VarChar(512)
-  price         Decimal             @default(0) @db.Decimal(10, 2)
-  difficultyLevels String           @db.VarChar(64) // Хранится как строка "A1,A2,B1"
-  isPublished   Boolean             @default(false)
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @default(now()) @updatedAt
-
-  modules       CourseModule[]
-  userProgress  UserCourseProgress[]
+  id               String               @id @default(cuid())
+  title            String               @db.VarChar(255)
+  description      String?              @db.Text
+  imageUrl         String?              @db.VarChar(512)
+  price            Decimal              @default(0.00) @db.Decimal(10, 2)
+  difficultyLevels String               @db.VarChar(64)
+  isPublished      Boolean              @default(false)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @default(now()) @updatedAt
+  modules          CourseModule[]
+  userProgress     UserCourseProgress[]
 
   @@map("courses")
 }
 
-// Связь курс-модуль (многие ко многим с порядком)
 model CourseModule {
-  id        String   @id @default(cuid())
-  courseId  String
-  moduleId  String
-  order     Int      // Порядок модуля в курсе
-
-  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  module    Module   @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  courseId String
+  moduleId String
+  order    Int
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  module   Module @relation(fields: [moduleId], references: [id], onDelete: Cascade)
 
   @@unique([courseId, moduleId])
   @@unique([courseId, order])
@@ -123,31 +97,27 @@ model CourseModule {
   @@map("course_modules")
 }
 
-// === МОДУЛИ ===
 model Module {
-  id            String         @id @default(cuid())
-  title         String         @db.VarChar(255)
-  description   String?        @db.Text
-  imageUrl      String?        @db.VarChar(512)
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @default(now()) @updatedAt
-
-  courses       CourseModule[]
-  lessons       ModuleLesson[]
-  userProgress  UserModuleProgress[]
+  id           String               @id @default(cuid())
+  title        String               @db.VarChar(255)
+  description  String?              @db.Text
+  imageUrl     String?              @db.VarChar(512)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @default(now()) @updatedAt
+  courses      CourseModule[]
+  lessons      ModuleLesson[]
+  userProgress UserModuleProgress[]
 
   @@map("modules")
 }
 
-// Связь модуль-урок (многие ко многим с порядком)
 model ModuleLesson {
-  id        String   @id @default(cuid())
-  moduleId  String
-  lessonId  String
-  order     Int      // Порядок урока в модуле
-
-  module    Module   @relation(fields: [moduleId], references: [id], onDelete: Cascade)
-  lesson    Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  moduleId String
+  lessonId String
+  order    Int
+  lesson   Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  module   Module @relation(fields: [moduleId], references: [id], onDelete: Cascade)
 
   @@unique([moduleId, lessonId])
   @@unique([moduleId, order])
@@ -155,84 +125,185 @@ model ModuleLesson {
   @@map("module_lessons")
 }
 
-// === УРОКИ ===
 model Lesson {
-  id            String         @id @default(cuid())
-  title         String         @db.VarChar(255)
-  description   String?        @db.Text
-  content       Json           // JSON структура с блоками контента
-  xpReward      Int            @default(15)
-  duration      Int?           // Ожидаемое время прохождения в минутах
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @default(now()) @updatedAt
-
-  modules       ModuleLesson[]
-  userProgress  UserLessonProgress[]
+  id           String               @id @default(cuid())
+  title        String               @db.VarChar(255)
+  description  String?              @db.Text
+  content      Json
+  xpReward     Int                  @default(15)
+  duration     Int?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @default(now()) @updatedAt
+  modules      ModuleLesson[]
+  userProgress UserLessonProgress[]
 
   @@map("lessons")
 }
 
-// === ПРОГРЕСС ПОЛЬЗОВАТЕЛЕЙ ===
-
-// Прогресс по курсу
 model UserCourseProgress {
-  id            String         @id @default(cuid())
-  userId        String
-  courseId      String
-  status        ProgressStatus @default(NOT_STARTED)
-  progress      Int            @default(0) // Процент завершения 0-100
-  startedAt     DateTime?
-  completedAt   DateTime?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @default(now()) @updatedAt
-
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  course        Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  id          String         @id @default(cuid())
+  userId      String
+  courseId    String
+  status      ProgressStatus @default(NOT_STARTED)
+  progress    Int            @default(0)
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @default(now()) @updatedAt
+  course      Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, courseId])
   @@index([courseId])
   @@map("user_course_progress")
 }
 
-// Прогресс по модулю
 model UserModuleProgress {
-  id            String         @id @default(cuid())
-  userId        String
-  moduleId      String
-  status        ProgressStatus @default(NOT_STARTED)
-  progress      Int            @default(0) // Процент завершения 0-100
-  startedAt     DateTime?
-  completedAt   DateTime?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @default(now()) @updatedAt
-
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  module        Module         @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  id          String         @id @default(cuid())
+  userId      String
+  moduleId    String
+  status      ProgressStatus @default(NOT_STARTED)
+  progress    Int            @default(0)
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @default(now()) @updatedAt
+  module      Module         @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, moduleId])
   @@index([moduleId])
   @@map("user_module_progress")
 }
 
-// Прогресс по уроку
 model UserLessonProgress {
-  id            String         @id @default(cuid())
-  userId        String
-  lessonId      String
-  status        ProgressStatus @default(NOT_STARTED)
-  stars         Int            @default(0) // Звезды за выполнение 0-3
-  score         Int?           // Баллы за выполнение (если применимо)
-  startedAt     DateTime?
-  completedAt   DateTime?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @default(now()) @updatedAt
-
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  lesson        Lesson         @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  id          String         @id @default(cuid())
+  userId      String
+  lessonId    String
+  status      ProgressStatus @default(NOT_STARTED)
+  stars       Int            @default(0)
+  score       Int?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @default(now()) @updatedAt
+  lesson      Lesson         @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, lessonId])
   @@index([lessonId])
   @@map("user_lesson_progress")
+}
+
+model VideoLearningContent {
+  id                          Int                                       @id @default(autoincrement())
+  videoName                   String                                    @map("video_name") @db.VarChar(255)
+  videoUrl                    String?                                   @map("video_url") @db.VarChar(500)
+  cefrLevel                   VideoLearningContentCefrLevel             @map("cefr_level")
+  speechSpeed                 VideoLearningContentSpeechSpeed?          @default(normal) @map("speech_speed")
+  grammarComplexity           VideoLearningContentGrammarComplexity?    @default(intermediate) @map("grammar_complexity")
+  vocabularyComplexity        VideoLearningContentVocabularyComplexity? @default(intermediate) @map("vocabulary_complexity")
+  topics                      Json                                      @map("topics")
+  transcriptFull              String                                    @map("transcript_full") @db.Text
+  transcriptChunks            Json                                      @map("transcript_chunks")
+  transcript_word_chunks      Json?
+  transcriptTranslationFull   String?                                   @map("transcript_translation_full") @db.Text
+  transcriptTranslationChunks Json?                                     @map("transcript_translation_chunks")
+  exercises                   Json                                      @map("exercises")
+  durationSeconds             Int?                                      @map("duration_seconds")
+  audioLevel                  Float?                                    @map("audio_level")
+  likesCount                  Int                                       @default(0) @map("likes_count")
+  processedAt                 DateTime?                                 @default(now()) @map("processed_at") @db.Timestamp(0)
+  status                      VideoLearningContentStatus?               @default(completed) @map("status")
+  progressEntries             VideoLearningProgress[]
+  videoTopics                 VideoTopic[]
+  likes                       VideoLike[]
+
+  @@index([cefrLevel], map: "idx_cefr_level")
+  @@index([processedAt], map: "idx_processed_at")
+  @@index([status], map: "idx_status")
+  @@map("video_learning_content")
+}
+
+model VideoTopic {
+  id        Int                  @id @default(autoincrement())
+  contentId Int                  @map("video_id")
+  topic     String               @db.VarChar(100)
+  content   VideoLearningContent @relation(fields: [contentId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "video_topics_ibfk_1")
+
+  @@index([topic], map: "idx_topic")
+  @@index([contentId], map: "idx_video_id")
+  @@map("video_topics")
+}
+
+model VideoLearningProgress {
+  id        Int                  @id @default(autoincrement())
+  userId    String               @map("user_id")
+  contentId Int                  @map("content_id")
+  status    VideoLearningStatus  @default(NOT_STARTED) @map("status")
+  answers   Json?                @map("answers")
+  score     Int?                 @map("score")
+  createdAt DateTime             @default(now()) @map("created_at")
+  updatedAt DateTime             @default(now()) @updatedAt @map("updated_at")
+  content   VideoLearningContent @relation(fields: [contentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([userId, contentId])
+  @@index([contentId])
+  @@map("video_learning_progress")
+}
+
+model VideoLike {
+  id        Int                  @id @default(autoincrement())
+  userId    String               @map("user_id")
+  contentId Int                  @map("content_id")
+  createdAt DateTime             @default(now()) @map("created_at")
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  content   VideoLearningContent @relation(fields: [contentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([userId, contentId])
+  @@index([contentId])
+  @@map("video_likes")
+}
+
+model VideoTopicPreference {
+  id        Int      @id @default(autoincrement())
+  userId    String   @map("user_id")
+  topic     String   @db.VarChar(100)
+  likes     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([userId, topic])
+  @@index([topic])
+  @@map("video_topic_preferences")
+}
+
+model video_transcriptions {
+  id                Int                          @id @default(autoincrement())
+  video_name        String                       @db.VarChar(255)
+  video_url         String?                      @db.VarChar(500)
+  transcript_full   String                       @db.Text
+  transcript_chunks Json
+  duration_seconds  Int?
+  processed_at      DateTime?                    @default(now()) @db.Timestamp(0)
+  status            video_transcriptions_status? @default(completed)
+
+  @@index([processed_at], map: "idx_processed_at")
+  @@index([status], map: "idx_status")
+}
+
+enum UserRole {
+  student
+  teacher
+  admin
+}
+
+enum ProgressStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
 }
 
 enum VideoLearningStatus {
@@ -285,54 +356,9 @@ enum VideoLearningContentStatus {
   @@map("video_learning_content_status")
 }
 
-model VideoLearningContent {
-  id                          Int                                     @id @default(autoincrement())
-  videoName                   String                                  @db.VarChar(255) @map("video_name")
-  videoUrl                    String?                                 @db.VarChar(500) @map("video_url")
-  cefrLevel                   VideoLearningContentCefrLevel           @map("cefr_level")
-  speechSpeed                 VideoLearningContentSpeechSpeed?        @map("speech_speed")
-  grammarComplexity           VideoLearningContentGrammarComplexity?  @map("grammar_complexity")
-  vocabularyComplexity        VideoLearningContentVocabularyComplexity? @map("vocabulary_complexity")
-  topics                      Json                                    @map("topics")
-  transcriptFull              String                                  @db.Text @map("transcript_full")
-  transcriptChunks            Json                                    @map("transcript_chunks")
-  transcriptTranslationFull   String?                                 @db.Text @map("transcript_translation_full")
-  transcriptTranslationChunks Json?                                   @map("transcript_translation_chunks")
-  exercises                   Json                                    @map("exercises")
-  durationSeconds             Int?                                    @map("duration_seconds")
-  audioLevel                  Float?                                  @map("audio_level") // Коэффициент нормализации громкости (0.1-1.0)
-  processedAt                 DateTime?                               @default(now()) @map("processed_at")
-  status                      VideoLearningContentStatus?             @map("status")
-  videoTopics                 VideoTopic[]
-  progressEntries             VideoLearningProgress[]
-
-  @@map("video_learning_content")
-}
-
-model VideoTopic {
-  id        Int                   @id @default(autoincrement())
-  contentId Int                   @map("video_id")
-  topic     String                @db.VarChar(100)
-  content   VideoLearningContent  @relation(fields: [contentId], references: [id], onDelete: Cascade)
-
-  @@index([contentId])
-  @@map("video_topics")
-}
-
-model VideoLearningProgress {
-  id        Int                 @id @default(autoincrement())
-  userId    String              @map("user_id")
-  contentId Int                 @map("content_id")
-  status    VideoLearningStatus @default(NOT_STARTED) @map("status")
-  answers   Json?               @map("answers")
-  score     Int?                @map("score")
-  createdAt DateTime            @default(now()) @map("created_at")
-  updatedAt DateTime            @default(now()) @updatedAt @map("updated_at")
-
-  user    User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  content VideoLearningContent @relation(fields: [contentId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, contentId])
-  @@index([contentId])
-  @@map("video_learning_progress")
+enum video_transcriptions_status {
+  pending
+  processing
+  completed
+  failed
 }
