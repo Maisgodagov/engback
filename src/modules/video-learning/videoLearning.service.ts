@@ -316,6 +316,7 @@ const mapContentRecord = (record: ContentRecord, isLiked = false): ProcessedVide
 const computeRecommendationScores = async (
   userId: string,
   excludeIds: Set<number>,
+  cefrLevels?: string,
 ) => {
   const [likedRecords, topicPreferences, progressRecords] = await Promise.all([
     prisma.videoLike.findMany({
@@ -359,7 +360,17 @@ const computeRecommendationScores = async (
     }
   }
 
+  // Parse cefrLevels filter
+  const allowedLevels = cefrLevels
+    ? cefrLevels.split(',').map(level => level.trim().toUpperCase())
+    : null;
+
   const candidateRecords = await prisma.videoLearningContent.findMany({
+    where: allowedLevels && allowedLevels.length > 0 ? {
+      cefrLevel: {
+        in: allowedLevels as any,
+      },
+    } : undefined,
     include: {
       videoTopics: {
         select: { topic: true },
@@ -403,6 +414,7 @@ const getFeed = async (
   userId: string,
   limit?: number,
   cursor?: string | null,
+  cefrLevels?: string,
 ): Promise<{ items: VideoFeedItem[]; nextCursor: string | null; hasMore: boolean }> => {
   const normalizedLimit = limit && limit > 0 ? limit : 1;
 
@@ -415,7 +427,7 @@ const getFeed = async (
       .forEach((value) => excludeIds.add(value));
   }
 
-  const { likedSet, statusMap, unwatched, watched } = await computeRecommendationScores(userId, excludeIds);
+  const { likedSet, statusMap, unwatched, watched } = await computeRecommendationScores(userId, excludeIds, cefrLevels);
 
   const combined = [...unwatched, ...watched];
   if (!combined.length) {

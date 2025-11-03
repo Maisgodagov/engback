@@ -26,8 +26,9 @@ export const getFeed = async (req: Request, res: Response) => {
   // Parse pagination params
   const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 0;
   const cursor = req.query.cursor ? (req.query.cursor as string) : undefined;
+  const cefrLevels = req.query.cefrLevels ? (req.query.cefrLevels as string) : undefined;
 
-  const result = await videoLearningService.getFeed(userId, limit, cursor);
+  const result = await videoLearningService.getFeed(userId, limit, cursor, cefrLevels);
   res.json(result);
 };
 
