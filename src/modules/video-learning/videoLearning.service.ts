@@ -15,6 +15,18 @@ import type {
   PhraseSearchResult,
   LikeStatus,
 } from './videoLearning.types';
+import type {
+  UpdateCefrLevelInput,
+  UpdateSpeechSpeedInput,
+  UpdateGrammarComplexityInput,
+  UpdateVocabularyComplexityInput,
+  UpdateTopicsInput,
+  UpdateTranscriptChunksInput,
+  UpdateTranslationChunksInput,
+  UpdateExercisesInput,
+  UpdateIsAdultContentInput,
+  UpdateModerationStatusInput,
+} from './videoLearning.schemas';
 
 type ContentRecord = {
   id: number;
@@ -36,6 +48,8 @@ type ContentRecord = {
   processedAt: Date | null;
   status: string | null;
   likesCount: number | null;
+  isAdultContent: boolean | null;
+  isModerated: boolean;
 };
 
 const parseChunkArray = (value: unknown): TranscriptWordChunk[] => {
@@ -81,6 +95,115 @@ const buildContextText = (
   const from = Math.max(0, startIndex - windowSize);
   const to = Math.min(chunks.length, endIndex + windowSize + 1);
   return formatChunksText(chunks.slice(from, to));
+};
+
+const ensureContentNumericId = (value: string | number): number => {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(numeric) || numeric <= 0) {
+    throw Object.assign(new Error('Invalid content identifier'), { status: 400 });
+  }
+  return numeric;
+};
+
+type SanitizedTranscriptChunk = {
+  text: string;
+  timestamp: [number, number];
+};
+
+const sanitizeTranscriptChunksForStorage = (chunks: UpdateTranscriptChunksInput['chunks']): SanitizedTranscriptChunk[] =>
+  chunks.map((chunk) => ({
+    text: chunk.text.trim(),
+    timestamp: [Number(chunk.timestamp[0]), Number(chunk.timestamp[1])] as [number, number],
+  }));
+
+const sanitizeTranslationChunksForStorage = (chunks: UpdateTranslationChunksInput['chunks']): SanitizedTranscriptChunk[] =>
+  chunks.map((chunk) => ({
+    text: chunk.text.trim(),
+    timestamp: [Number(chunk.timestamp[0]), Number(chunk.timestamp[1])] as [number, number],
+  }));
+
+const buildFullTextFromChunks = (chunks: SanitizedTranscriptChunk[]): string => {
+  const combined = chunks
+    .map((chunk) => chunk.text.trim())
+    .filter((text) => text.length > 0)
+    .join(' ');
+  if (!combined.length) return '';
+  return combined.replace(/\s+([.,!?;:])/g, '$1').trim();
+};
+
+const normalizeTopicsForStorage = (topics: UpdateTopicsInput['topics']): string[] => {
+  const unique = new Map<string, string>();
+  topics.forEach((topic) => {
+    const trimmed = topic.trim();
+    if (!trimmed) return;
+    const key = trimmed.toLowerCase();
+    if (!unique.has(key)) {
+      unique.set(key, trimmed);
+    }
+  });
+  return Array.from(unique.values()).slice(0, 20);
+};
+
+const normalizeExercisesForStorage = (input: UpdateExercisesInput['exercises']): Prisma.JsonArray => {
+  const normalized = input.map((exercise) => {
+    const id = (exercise.id ?? '').trim() || `exercise-${randomUUID()}`;
+    const options = exercise.options.map((option) => option.trim());
+    const boundedCorrect = Math.min(Math.max(exercise.correctAnswer, 0), options.length - 1);
+    const base = {
+      id,
+      type: exercise.type,
+      question: exercise.question.trim(),
+      options,
+      correctAnswer: boundedCorrect,
+    };
+    if (exercise.type === 'vocabulary') {
+      return {
+        ...base,
+        word: (exercise.word ?? '').trim(),
+      };
+    }
+    return base;
+  });
+  return normalized as unknown as Prisma.JsonArray;
+};
+
+const fetchModerationFlags = async (
+  ids: number[],
+): Promise<Map<number, { isAdultContent: boolean; isModerated: boolean }>> => {
+  if (!ids.length) return new Map();
+  const rows = await prisma.$queryRaw<Array<{ id: number; isAdultContent: number | boolean | null; isModerated: number | boolean | null }>>`
+    SELECT id, is_adult_content AS isAdultContent, is_moderated AS isModerated
+    FROM video_learning_content
+    WHERE id IN (${Prisma.join(ids)})
+  `;
+
+  const map = new Map<number, { isAdultContent: boolean; isModerated: boolean }>();
+  rows.forEach((row) => {
+    const adultValue =
+      typeof row.isAdultContent === 'number'
+        ? row.isAdultContent
+        : row.isAdultContent === true
+        ? 1
+        : Number(row.isAdultContent ?? 0);
+    const moderatedValue =
+      typeof row.isModerated === 'number'
+        ? row.isModerated
+        : row.isModerated === true
+        ? 1
+        : Number(row.isModerated ?? 0);
+    map.set(row.id, {
+      isAdultContent: adultValue === 1,
+      isModerated: moderatedValue === 1,
+    });
+  });
+  return map;
+};
+
+const fetchModerationFlag = async (
+  id: number,
+): Promise<{ isAdultContent: boolean; isModerated: boolean }> => {
+  const map = await fetchModerationFlags([id]);
+  return map.get(id) ?? { isAdultContent: false, isModerated: false };
 };
 
 type PhraseMatch = {
@@ -280,7 +403,11 @@ const mapTranslation = (fullText: string | null, chunksValue: unknown): Translat
   wordChunks: [],
 });
 
-const mapContentRecord = (record: ContentRecord, isLiked = false): ProcessedVideo => {
+const mapContentRecord = (
+  record: ContentRecord,
+  isLiked = false,
+  flags?: { isAdultContent?: boolean; isModerated?: boolean },
+): ProcessedVideo => {
   const transcription = mapTranscription(
     record.transcriptFull ?? '',
     record.transcriptChunks,
@@ -308,16 +435,31 @@ const mapContentRecord = (record: ContentRecord, isLiked = false): ProcessedVide
     exercises,
     likesCount: record.likesCount ?? 0,
     isLiked,
+    isAdultContent:
+      flags?.isAdultContent ??
+      (typeof record.isAdultContent === 'boolean'
+        ? record.isAdultContent
+        : Boolean(record.isAdultContent)),
+    isModerated:
+      flags?.isModerated ??
+      (typeof record.isModerated === 'boolean'
+        ? record.isModerated
+        : Boolean(record.isModerated)),
     createdAt: (record.processedAt ?? new Date()).toISOString(),
     updatedAt: (record.processedAt ?? new Date()).toISOString(),
   };
 };
+
+type ModerationFilter = 'all' | 'moderated' | 'unmoderated';
 
 const computeRecommendationScores = async (
   userId: string,
   excludeIds: Set<number>,
   cefrLevels?: string,
   speechSpeeds?: string,
+  showAdultContent: boolean | undefined = true,
+  moderationFilter: ModerationFilter | undefined = 'moderated',
+  isAdmin: boolean = false,
 ) => {
   const [likedRecords, topicPreferences, progressRecords] = await Promise.all([
     prisma.videoLike.findMany({
@@ -395,7 +537,32 @@ const computeRecommendationScores = async (
     },
   });
 
-  const scored = candidateRecords
+  const moderationMap = await fetchModerationFlags(candidateRecords.map((record) => record.id));
+
+  const effectiveModerationFilter: ModerationFilter = isAdmin
+    ? moderationFilter ?? 'all'
+    : 'moderated';
+
+  const visibleRecords = candidateRecords.filter((record) => {
+    const flags = moderationMap.get(record.id);
+    const isAdult =
+      flags?.isAdultContent ?? (typeof record.isAdultContent === 'boolean' ? record.isAdultContent : false);
+    if (showAdultContent === false && isAdult) {
+      return false;
+    }
+
+    const isModerated =
+      flags?.isModerated ?? (typeof record.isModerated === 'boolean' ? record.isModerated : false);
+    if (effectiveModerationFilter === 'moderated') {
+      return isModerated;
+    }
+    if (effectiveModerationFilter === 'unmoderated') {
+      return !isModerated;
+    }
+    return true;
+  });
+
+  const scored = visibleRecords
     .filter((record) => !excludeIds.has(record.id))
     .map((record) => {
       const topics = record.videoTopics.map((topic) => topic.topic);
@@ -410,6 +577,7 @@ const computeRecommendationScores = async (
         record,
         score,
         isWatched: watchedSet.has(record.id),
+        moderation: moderationMap.get(record.id),
       };
     });
 
@@ -433,6 +601,9 @@ const getFeed = async (
   cursor?: string | null,
   cefrLevels?: string,
   speechSpeeds?: string,
+  showAdultContent: boolean | undefined = true,
+  moderationFilter: ModerationFilter | undefined = 'moderated',
+  isAdmin: boolean = false,
 ): Promise<{ items: VideoFeedItem[]; nextCursor: string | null; hasMore: boolean }> => {
   const normalizedLimit = limit && limit > 0 ? limit : 1;
 
@@ -445,7 +616,15 @@ const getFeed = async (
       .forEach((value) => excludeIds.add(value));
   }
 
-  const { likedSet, statusMap, unwatched, watched } = await computeRecommendationScores(userId, excludeIds, cefrLevels, speechSpeeds);
+  const { likedSet, statusMap, unwatched, watched } = await computeRecommendationScores(
+    userId,
+    excludeIds,
+    cefrLevels,
+    speechSpeeds,
+    showAdultContent,
+    moderationFilter,
+    isAdmin,
+  );
 
   const combined = [...unwatched, ...watched];
   if (!combined.length) {
@@ -455,9 +634,9 @@ const getFeed = async (
   const selected = combined.slice(0, normalizedLimit);
   const hasMore = combined.length > normalizedLimit;
 
-  const items: VideoFeedItem[] = selected.map(({ record }) => {
+  const items: VideoFeedItem[] = selected.map(({ record, moderation }) => {
     const { videoTopics: _topics, ...rest } = record;
-    const processed = mapContentRecord(rest as ContentRecord, likedSet.has(record.id));
+    const processed = mapContentRecord(rest as ContentRecord, likedSet.has(record.id), moderation);
     return {
       id: processed.id,
       videoName: processed.videoName,
@@ -469,6 +648,8 @@ const getFeed = async (
       likesCount: processed.likesCount,
       isLiked: processed.isLiked,
       createdAt: processed.createdAt,
+      isAdultContent: processed.isAdultContent,
+      isModerated: processed.isModerated,
     };
   });
 
@@ -715,7 +896,164 @@ const getContentById = async (id: string, userId?: string | null): Promise<Proce
     likedByUser = Boolean(likeRecord);
   }
 
-  return mapContentRecord(record as ContentRecord, likedByUser);
+  const moderation = await fetchModerationFlag(numericId);
+  return mapContentRecord(record as ContentRecord, likedByUser, moderation);
+};
+
+const getContentOrThrow = async (id: string): Promise<ProcessedVideo> => {
+  const content = await getContentById(id);
+  if (!content) {
+    throw Object.assign(new Error('Video learning content not found'), { status: 404 });
+  }
+  return content;
+};
+
+const updateCefrLevel = async (id: string, payload: UpdateCefrLevelInput): Promise<ProcessedVideo> => {
+  const numericId = ensureContentNumericId(id);
+  await prisma.videoLearningContent.update({
+    where: { id: numericId },
+    data: { cefrLevel: payload.cefrLevel },
+  });
+  return getContentOrThrow(String(numericId));
+};
+
+const updateSpeechSpeed = async (id: string, payload: UpdateSpeechSpeedInput): Promise<ProcessedVideo> => {
+  const numericId = ensureContentNumericId(id);
+  await prisma.videoLearningContent.update({
+    where: { id: numericId },
+    data: { speechSpeed: payload.speechSpeed },
+  });
+  return getContentOrThrow(String(numericId));
+};
+
+const updateGrammarComplexity = async (
+  id: string,
+  payload: UpdateGrammarComplexityInput,
+): Promise<ProcessedVideo> => {
+  const numericId = ensureContentNumericId(id);
+  await prisma.videoLearningContent.update({
+    where: { id: numericId },
+    data: { grammarComplexity: payload.grammarComplexity },
+  });
+  return getContentOrThrow(String(numericId));
+};
+
+const updateVocabularyComplexity = async (
+  id: string,
+  payload: UpdateVocabularyComplexityInput,
+): Promise<ProcessedVideo> => {
+  const numericId = ensureContentNumericId(id);
+  await prisma.videoLearningContent.update({
+    where: { id: numericId },
+    data: { vocabularyComplexity: payload.vocabularyComplexity },
+  });
+  return getContentOrThrow(String(numericId));
+};
+
+const updateTopics = async (id: string, payload: UpdateTopicsInput): Promise<ProcessedVideo> => {
+  const numericId = ensureContentNumericId(id);
+  const normalizedTopics = normalizeTopicsForStorage(payload.topics);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.videoTopic.deleteMany({ where: { contentId: numericId } });
+    if (normalizedTopics.length > 0) {
+      await tx.videoTopic.createMany({
+        data: normalizedTopics.map((topic) => ({ contentId: numericId, topic })),
+        skipDuplicates: true,
+      });
+    }
+    await tx.videoLearningContent.update({
+      where: { id: numericId },
+      data: {
+        topics: normalizedTopics,
+      },
+    });
+  });
+
+  return getContentOrThrow(String(numericId));
+};
+
+const updateTranscriptChunks = async (
+  id: string,
+  payload: UpdateTranscriptChunksInput,
+): Promise<ProcessedVideo> => {
+  const numericId = ensureContentNumericId(id);
+  const sanitized = sanitizeTranscriptChunksForStorage(payload.chunks);
+  const fullText = buildFullTextFromChunks(sanitized);
+
+  await prisma.videoLearningContent.update({
+    where: { id: numericId },
+    data: {
+      transcriptChunks: sanitized as unknown as Prisma.JsonArray,
+      transcriptFull: fullText,
+    },
+  });
+
+  return getContentOrThrow(String(numericId));
+};
+
+const updateTranslationChunks = async (
+  id: string,
+  payload: UpdateTranslationChunksInput,
+): Promise<ProcessedVideo> => {
+  const numericId = ensureContentNumericId(id);
+  const sanitized = sanitizeTranslationChunksForStorage(payload.chunks);
+  const fullText = buildFullTextFromChunks(sanitized);
+
+  await prisma.videoLearningContent.update({
+    where: { id: numericId },
+    data: {
+      transcriptTranslationChunks: sanitized as unknown as Prisma.JsonArray,
+      transcriptTranslationFull: fullText.length > 0 ? fullText : null,
+    },
+  });
+
+  return getContentOrThrow(String(numericId));
+};
+
+const updateExercises = async (id: string, payload: UpdateExercisesInput): Promise<ProcessedVideo> => {
+  const numericId = ensureContentNumericId(id);
+  const normalized = normalizeExercisesForStorage(payload.exercises);
+
+  await prisma.videoLearningContent.update({
+    where: { id: numericId },
+    data: { exercises: normalized },
+  });
+
+  return getContentOrThrow(String(numericId));
+};
+
+const updateIsAdultContent = async (
+  id: string,
+  payload: UpdateIsAdultContentInput,
+): Promise<ProcessedVideo> => {
+  const numericId = ensureContentNumericId(id);
+  await prisma.$executeRaw`
+    UPDATE video_learning_content
+    SET is_adult_content = ${payload.isAdultContent ? 1 : 0}
+    WHERE id = ${numericId}
+  `;
+  return getContentOrThrow(String(numericId));
+};
+
+const updateModerationStatus = async (
+  id: string,
+  payload: UpdateModerationStatusInput,
+): Promise<ProcessedVideo> => {
+  const numericId = ensureContentNumericId(id);
+  await prisma.$executeRaw`
+    UPDATE video_learning_content
+    SET is_moderated = ${payload.isModerated ? 1 : 0}
+    WHERE id = ${numericId}
+  `;
+  return getContentOrThrow(String(numericId));
+};
+
+const deleteVideo = async (id: string): Promise<void> => {
+  const numericId = ensureContentNumericId(id);
+  await prisma.videoLearningContent.delete({
+    where: { id: numericId },
+  });
 };
 
 const submitProgress = async (
@@ -734,7 +1072,8 @@ const submitProgress = async (
     throw Object.assign(new Error('Video learning content not found'), { status: 404 });
   }
 
-  const mapped = mapContentRecord(record as ContentRecord);
+  const moderation = await fetchModerationFlag(numericContentId);
+  const mapped = mapContentRecord(record as ContentRecord, false, moderation);
   const exercises = mapped.exercises;
 
   const serializeAnswers = (input: SubmitExerciseAnswer[]): Prisma.JsonArray =>
@@ -800,8 +1139,16 @@ export const videoLearningService = {
   searchPhrase,
   getContentById,
   updateLikeStatus,
+  updateCefrLevel,
+  updateSpeechSpeed,
+  updateGrammarComplexity,
+  updateVocabularyComplexity,
+  updateTopics,
+  updateTranscriptChunks,
+  updateTranslationChunks,
+  updateExercises,
+  updateIsAdultContent,
+  updateModerationStatus,
+  deleteVideo,
   submitProgress,
 };
-
-
-

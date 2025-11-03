@@ -69,6 +69,8 @@ export interface ProcessedVideo {
   exercises: Exercise[];
   likesCount: number;
   isLiked: boolean;
+  isAdultContent?: boolean;
+  isModerated?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -104,6 +106,8 @@ export interface VideoFeedItem {
   likesCount: number;
   isLiked: boolean;
   createdAt: string;
+  isAdultContent?: boolean;
+  isModerated?: boolean;
 }
 
 export interface SubmitExerciseAnswer {

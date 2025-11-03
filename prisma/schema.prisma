@@ -213,6 +213,8 @@ model VideoLearningContent {
   durationSeconds             Int?                                      @map("duration_seconds")
   audioLevel                  Float?                                    @map("audio_level")
   likesCount                  Int                                       @default(0) @map("likes_count")
+  isAdultContent              Boolean?                                  @map("is_adult_content")
+  isModerated                 Boolean                                   @default(false) @map("is_moderated")
   processedAt                 DateTime?                                 @default(now()) @map("processed_at") @db.Timestamp(0)
   status                      VideoLearningContentStatus?               @default(completed) @map("status")
   progressEntries             VideoLearningProgress[]

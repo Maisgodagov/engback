@@ -6,6 +6,16 @@ import {
   submitProgressSchema,
   phraseSearchQuerySchema,
   updateLikeSchema,
+  updateCefrLevelSchema,
+  updateSpeechSpeedSchema,
+  updateGrammarComplexitySchema,
+  updateVocabularyComplexitySchema,
+  updateTopicsSchema,
+  updateTranscriptChunksSchema,
+  updateTranslationChunksSchema,
+  updateExercisesSchema,
+  updateIsAdultContentSchema,
+  updateModerationStatusSchema,
 } from './videoLearning.schemas';
 
 const getUserId = (req: Request): string | null => {
@@ -28,8 +38,29 @@ export const getFeed = async (req: Request, res: Response) => {
   const cursor = req.query.cursor ? (req.query.cursor as string) : undefined;
   const cefrLevels = req.query.cefrLevels ? (req.query.cefrLevels as string) : undefined;
   const speechSpeeds = req.query.speechSpeeds ? (req.query.speechSpeeds as string) : undefined;
+  const showAdultContentParam =
+    typeof req.query.showAdultContent === 'string' ? (req.query.showAdultContent as string) : undefined;
+  const showAdultContent =
+    showAdultContentParam === undefined ? undefined : showAdultContentParam.toLowerCase() === 'true';
+  const moderationFilterParam =
+    typeof req.query.moderationFilter === 'string' ? (req.query.moderationFilter as string).toLowerCase() : undefined;
+  const moderationFilter =
+    moderationFilterParam && ['all', 'moderated', 'unmoderated'].includes(moderationFilterParam)
+      ? (moderationFilterParam as 'all' | 'moderated' | 'unmoderated')
+      : undefined;
+  const userRole = (req.header('x-user-role') ?? '').toLowerCase();
+  const isAdmin = userRole === 'admin';
 
-  const result = await videoLearningService.getFeed(userId, limit, cursor, cefrLevels, speechSpeeds);
+  const result = await videoLearningService.getFeed(
+    userId,
+    limit,
+    cursor,
+    cefrLevels,
+    speechSpeeds,
+    showAdultContent,
+    moderationFilter,
+    isAdmin,
+  );
   res.json(result);
 };
 
@@ -89,4 +120,80 @@ export const updateLike = async (req: Request, res: Response) => {
   const payload = updateLikeSchema.parse(req.body);
   const result = await videoLearningService.updateLikeStatus(userId, params.id, payload.like);
   res.json(result);
+};
+
+export const updateCefrLevel = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const body = updateCefrLevelSchema.parse(req.body);
+  const result = await videoLearningService.updateCefrLevel(params.id, body);
+  res.json(result);
+};
+
+export const updateSpeechSpeed = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const body = updateSpeechSpeedSchema.parse(req.body);
+  const result = await videoLearningService.updateSpeechSpeed(params.id, body);
+  res.json(result);
+};
+
+export const updateGrammarComplexity = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const body = updateGrammarComplexitySchema.parse(req.body);
+  const result = await videoLearningService.updateGrammarComplexity(params.id, body);
+  res.json(result);
+};
+
+export const updateVocabularyComplexity = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const body = updateVocabularyComplexitySchema.parse(req.body);
+  const result = await videoLearningService.updateVocabularyComplexity(params.id, body);
+  res.json(result);
+};
+
+export const updateTopics = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const body = updateTopicsSchema.parse(req.body);
+  const result = await videoLearningService.updateTopics(params.id, body);
+  res.json(result);
+};
+
+export const updateTranscriptChunks = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const body = updateTranscriptChunksSchema.parse(req.body);
+  const result = await videoLearningService.updateTranscriptChunks(params.id, body);
+  res.json(result);
+};
+
+export const updateTranslationChunks = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const body = updateTranslationChunksSchema.parse(req.body);
+  const result = await videoLearningService.updateTranslationChunks(params.id, body);
+  res.json(result);
+};
+
+export const updateExercises = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const body = updateExercisesSchema.parse(req.body);
+  const result = await videoLearningService.updateExercises(params.id, body);
+  res.json(result);
+};
+
+export const updateIsAdultContent = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const body = updateIsAdultContentSchema.parse(req.body);
+  const result = await videoLearningService.updateIsAdultContent(params.id, body);
+  res.json(result);
+};
+
+export const updateModerationStatus = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const body = updateModerationStatusSchema.parse(req.body);
+  const result = await videoLearningService.updateModerationStatus(params.id, body);
+  res.json(result);
+};
+
+export const deleteVideo = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  await videoLearningService.deleteVideo(params.id);
+  res.status(204).send();
 };
