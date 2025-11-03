@@ -317,6 +317,7 @@ const computeRecommendationScores = async (
   userId: string,
   excludeIds: Set<number>,
   cefrLevels?: string,
+  speechSpeeds?: string,
 ) => {
   const [likedRecords, topicPreferences, progressRecords] = await Promise.all([
     prisma.videoLike.findMany({
@@ -365,12 +366,28 @@ const computeRecommendationScores = async (
     ? cefrLevels.split(',').map(level => level.trim().toUpperCase())
     : null;
 
+  // Parse speechSpeeds filter
+  const allowedSpeeds = speechSpeeds
+    ? speechSpeeds.split(',').map(speed => speed.trim().toLowerCase())
+    : null;
+
+  // Build where clause
+  const whereClause: any = {};
+
+  if (allowedLevels && allowedLevels.length > 0) {
+    whereClause.cefrLevel = {
+      in: allowedLevels as any,
+    };
+  }
+
+  if (allowedSpeeds && allowedSpeeds.length > 0) {
+    whereClause.speechSpeed = {
+      in: allowedSpeeds as any,
+    };
+  }
+
   const candidateRecords = await prisma.videoLearningContent.findMany({
-    where: allowedLevels && allowedLevels.length > 0 ? {
-      cefrLevel: {
-        in: allowedLevels as any,
-      },
-    } : undefined,
+    where: Object.keys(whereClause).length > 0 ? whereClause : undefined,
     include: {
       videoTopics: {
         select: { topic: true },
@@ -415,6 +432,7 @@ const getFeed = async (
   limit?: number,
   cursor?: string | null,
   cefrLevels?: string,
+  speechSpeeds?: string,
 ): Promise<{ items: VideoFeedItem[]; nextCursor: string | null; hasMore: boolean }> => {
   const normalizedLimit = limit && limit > 0 ? limit : 1;
 
@@ -427,7 +445,7 @@ const getFeed = async (
       .forEach((value) => excludeIds.add(value));
   }
 
-  const { likedSet, statusMap, unwatched, watched } = await computeRecommendationScores(userId, excludeIds, cefrLevels);
+  const { likedSet, statusMap, unwatched, watched } = await computeRecommendationScores(userId, excludeIds, cefrLevels, speechSpeeds);
 
   const combined = [...unwatched, ...watched];
   if (!combined.length) {
