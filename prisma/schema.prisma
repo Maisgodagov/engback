@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextIndex"]
 }
 
 datasource db {
@@ -224,6 +225,7 @@ model VideoLearningContent {
   @@index([cefrLevel], map: "idx_cefr_level")
   @@index([processedAt], map: "idx_processed_at")
   @@index([status], map: "idx_status")
+  @@fulltext([transcriptFull], map: "idx_transcript_full_fulltext")
   @@map("video_learning_content")
 }
 

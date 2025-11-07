@@ -77,7 +77,8 @@ const normalizeToken = (value: string): string =>
     .trim()
     .toLowerCase()
     .replace(/\u2019/g, "'")
-    .replace(/[^a-z0-9']+/g, '');
+    .replace(/['’,]/g, '')
+    .replace(/[^a-z0-9.]+/g, '');
 
 const formatChunksText = (chunks: TranscriptWordChunk[]): string => {
   if (!chunks.length) return '';
@@ -95,6 +96,37 @@ const buildContextText = (
   const from = Math.max(0, startIndex - windowSize);
   const to = Math.min(chunks.length, endIndex + windowSize + 1);
   return formatChunksText(chunks.slice(from, to));
+};
+
+const findChunkIndexesInRange = (
+  chunks: TranscriptWordChunk[],
+  rangeStart: number,
+  rangeEnd: number,
+): number[] => {
+  if (!chunks.length) return [];
+  const safeStart = Math.max(0, rangeStart);
+  const safeEnd = Math.max(safeStart, rangeEnd);
+  const indexes: number[] = [];
+  chunks.forEach((chunk, index) => {
+    const [chunkStart, chunkEnd] = chunk.timestamp;
+    if (!Number.isFinite(chunkStart) || !Number.isFinite(chunkEnd)) return;
+    if (chunkEnd > safeStart && chunkStart < safeEnd) {
+      indexes.push(index);
+    }
+  });
+  return indexes;
+};
+
+const buildTextFromChunkIndexes = (
+  chunks: TranscriptWordChunk[],
+  indexes: number[],
+): string => {
+  if (!indexes.length) return '';
+  const selected = indexes
+    .map((idx) => chunks[idx])
+    .filter((chunk): chunk is TranscriptWordChunk => Boolean(chunk) && typeof chunk.text === 'string');
+  if (!selected.length) return '';
+  return formatChunksText(selected);
 };
 
 const ensureContentNumericId = (value: string | number): number => {
@@ -214,8 +246,9 @@ type PhraseMatch = {
 const DEFAULT_SNIPPET_LIMIT = 10;
 const MAX_SNIPPET_LIMIT = 50;
 const CONTEXT_WINDOW = 4;
-const MATCH_PADDING_SECONDS = 1;
-const RECORD_FETCH_MULTIPLIER = 3;
+const DEFAULT_PADDING_SECONDS = 1;
+const MAX_PADDING_SECONDS = 10;
+const RECORD_FETCH_MULTIPLIER = 1.5;
 
 const findPhraseMatches = (
   wordChunks: TranscriptWordChunk[],
@@ -260,6 +293,13 @@ const sanitizeSnippetLimit = (limit?: number): number => {
   const coerced = Math.trunc(limit as number);
   if (Number.isNaN(coerced) || coerced <= 0) return DEFAULT_SNIPPET_LIMIT;
   return Math.min(coerced, MAX_SNIPPET_LIMIT);
+};
+
+const sanitizePaddingSeconds = (padding?: number): number => {
+  if (!Number.isFinite(padding ?? Number.NaN)) return DEFAULT_PADDING_SECONDS;
+  const coerced = Math.trunc(padding as number);
+  if (Number.isNaN(coerced) || coerced < 0) return DEFAULT_PADDING_SECONDS;
+  return Math.min(coerced, MAX_PADDING_SECONDS);
 };
 
 const adjustTopicPreferences = async (
@@ -668,7 +708,11 @@ const getFeed = async (
   };
 };
 
-const searchPhrase = async (phrase: string, limit?: number): Promise<PhraseSearchResult> => {
+const searchPhrase = async (
+  phrase: string,
+  limit?: number,
+  paddingSeconds?: number,
+): Promise<PhraseSearchResult> => {
   const trimmed = (phrase ?? '').trim();
   if (!trimmed) {
     return { phrase: '', items: [], returned: 0 };
@@ -684,83 +728,204 @@ const searchPhrase = async (phrase: string, limit?: number): Promise<PhraseSearc
   }
 
   const snippetsLimit = sanitizeSnippetLimit(limit);
+  const snippetPadding = sanitizePaddingSeconds(paddingSeconds);
   const fetchTake = Math.max(snippetsLimit * RECORD_FETCH_MULTIPLIER, snippetsLimit);
 
-  const candidates = await prisma.videoLearningContent.findMany({
-    where: {
-      transcriptFull: {
-        contains: trimmed,
-      },
-    },
-    select: {
-      id: true,
-      videoName: true,
-      videoUrl: true,
-      transcriptFull: true,
-      transcript_word_chunks: true,
-      durationSeconds: true,
-      audioLevel: true,
-    },
-    orderBy: {
-      processedAt: 'desc',
-    },
-    take: fetchTake,
-  });
+  const selectFields = {
+    id: true,
+    videoName: true,
+    videoUrl: true,
+    transcriptFull: true,
+    transcriptChunks: true,
+    transcript_word_chunks: true,
+    transcriptTranslationChunks: true,
+    durationSeconds: true,
+    audioLevel: true,
+  } as const;
 
+  type CandidateRecord = {
+    id: number;
+    videoName: string;
+    videoUrl: string | null;
+    transcriptFull: string;
+    transcriptChunks: unknown;
+    transcript_word_chunks: unknown;
+    transcriptTranslationChunks: unknown;
+    durationSeconds: number | null;
+    audioLevel: number | null;
+  };
+
+  const processedIds = new Set<number>();
   const snippets: PhraseSnippet[] = [];
 
-  for (const record of candidates) {
-    if (!record.videoUrl) continue;
+  const appendFromRecords = (records: CandidateRecord[]): boolean => {
+    for (const record of records) {
+      if (!record.videoUrl) continue;
+      if (processedIds.has(record.id)) continue;
+      processedIds.add(record.id);
 
-    const wordChunks = parseChunkArray(record.transcript_word_chunks);
-    if (!wordChunks.length) continue;
+      // OPTIMIZATION: Parse word chunks first (required for matching)
+      const wordChunks = parseChunkArray(record.transcript_word_chunks);
+      if (!wordChunks.length) continue;
 
-    const matches = findPhraseMatches(wordChunks, tokens);
-    if (!matches.length) continue;
+      const matches = findPhraseMatches(wordChunks, tokens);
+      if (!matches.length) continue;
 
-    for (const match of matches) {
-      const matchedWordChunks = wordChunks.slice(match.startIndex, match.endIndex + 1);
-      if (!matchedWordChunks.length) continue;
+      // OPTIMIZATION: Only parse sentence/translation chunks if we have matches
+      const sentenceChunks = parseChunkArray(record.transcriptChunks);
+      const translationChunks = parseChunkArray(record.transcriptTranslationChunks);
 
-      const startTimestamp = matchedWordChunks[0].timestamp[0];
-      const endTimestamp = matchedWordChunks[matchedWordChunks.length - 1].timestamp[1];
-      const startSeconds = Math.max(0, startTimestamp - MATCH_PADDING_SECONDS);
-      const rawEnd = endTimestamp + MATCH_PADDING_SECONDS;
-      const duration =
-        typeof record.durationSeconds === 'number' && Number.isFinite(record.durationSeconds)
-          ? record.durationSeconds
-          : null;
-      const endSeconds = duration !== null ? Math.min(rawEnd, duration) : rawEnd;
-      const safeEnd = endSeconds > startSeconds ? endSeconds : startSeconds + MATCH_PADDING_SECONDS;
-      const snippetId = `${record.id}-${match.startIndex}-${match.endIndex}`;
-      const matchedText = formatChunksText(matchedWordChunks);
-      const contextText = buildContextText(wordChunks, match.startIndex, match.endIndex, CONTEXT_WINDOW);
+      for (const match of matches) {
+        const matchedWordChunks = wordChunks.slice(match.startIndex, match.endIndex + 1);
+        if (!matchedWordChunks.length) continue;
 
-      snippets.push({
-        id: snippetId,
-        contentId: record.id.toString(),
-        videoName: record.videoName,
-        videoUrl: typeof record.videoUrl === 'string' ? record.videoUrl : '',
-        startSeconds,
-        endSeconds: safeEnd,
-        matchedText,
-        contextText,
-        phrase: trimmed,
-        durationSeconds: duration,
-        audioLevel:
-          typeof record.audioLevel === 'number' && Number.isFinite(record.audioLevel)
-            ? record.audioLevel
-            : undefined,
-      });
+        const startTimestamp = matchedWordChunks[0].timestamp[0];
+        const endTimestamp = matchedWordChunks[matchedWordChunks.length - 1].timestamp[1];
+        const startSeconds = Math.max(0, startTimestamp - snippetPadding);
+        const rawEnd = endTimestamp + snippetPadding;
+        const duration =
+          typeof record.durationSeconds === 'number' && Number.isFinite(record.durationSeconds)
+            ? record.durationSeconds
+            : null;
+        const endSeconds = duration !== null ? Math.min(rawEnd, duration) : rawEnd;
+        const minimumDelta = snippetPadding > 0 ? snippetPadding : 0.5;
+        const safeEnd = endSeconds > startSeconds ? endSeconds : startSeconds + minimumDelta;
+        const snippetId = `${record.id}-${match.startIndex}-${match.endIndex}`;
+        const matchedText = formatChunksText(matchedWordChunks);
+        let sentenceIndexes: number[] = [];
+        if (sentenceChunks.length) {
+          sentenceIndexes = findChunkIndexesInRange(sentenceChunks, startTimestamp, endTimestamp);
+          if (!sentenceIndexes.length) {
+            const fallbackIndex = sentenceChunks.findIndex((chunk) => {
+              const [start, end] = chunk.timestamp;
+              return startTimestamp >= start && startTimestamp <= end + 0.25;
+            });
+            if (fallbackIndex >= 0) {
+              sentenceIndexes = [fallbackIndex];
+            }
+          }
+        }
 
-      if (snippets.length >= snippetsLimit) {
-        return { phrase: trimmed, items: snippets.slice(0, snippetsLimit), returned: snippetsLimit };
+        const contextSentenceIndexes =
+          sentenceIndexes.length > 0
+            ? findChunkIndexesInRange(sentenceChunks, startSeconds, safeEnd)
+            : [];
+
+        const englishContextIndexes =
+          contextSentenceIndexes.length > 0
+            ? contextSentenceIndexes
+            : Array.from({ length: match.endIndex - match.startIndex + 1 }, (_, offset) => match.startIndex + offset);
+
+        const contextText =
+          sentenceChunks.length && englishContextIndexes.length
+            ? buildTextFromChunkIndexes(sentenceChunks, englishContextIndexes)
+            : buildContextText(wordChunks, match.startIndex, match.endIndex, CONTEXT_WINDOW);
+
+        const translationMatchedText =
+          translationChunks.length && sentenceIndexes.length
+            ? buildTextFromChunkIndexes(translationChunks, sentenceIndexes)
+            : '';
+
+        const translationContextText =
+          translationChunks.length && englishContextIndexes.length
+            ? buildTextFromChunkIndexes(translationChunks, englishContextIndexes)
+            : translationMatchedText;
+
+        snippets.push({
+          id: snippetId,
+          contentId: record.id.toString(),
+          videoName: record.videoName,
+          videoUrl: typeof record.videoUrl === 'string' ? record.videoUrl : '',
+          startSeconds,
+          endSeconds: safeEnd,
+          matchedText,
+          contextText,
+          phrase: trimmed,
+          durationSeconds: duration,
+          audioLevel:
+            typeof record.audioLevel === 'number' && Number.isFinite(record.audioLevel)
+              ? record.audioLevel
+              : undefined,
+          translationMatchedText: translationMatchedText || undefined,
+          translationContextText: translationContextText || undefined,
+        });
+
+        if (snippets.length >= snippetsLimit) {
+          return true;
+        }
       }
+    }
+    return false;
+  };
+
+  const buildResult = () => {
+    const returned = Math.min(snippets.length, snippetsLimit);
+    return { phrase: trimmed, items: snippets.slice(0, snippetsLimit), returned };
+  };
+
+  const fetchRecords = async (
+    where: Prisma.VideoLearningContentWhereInput | undefined,
+    skip = 0,
+  ): Promise<CandidateRecord[]> => {
+    const args: Prisma.VideoLearningContentFindManyArgs = {
+      where,
+      select: selectFields,
+      orderBy: { processedAt: 'desc' },
+      take: fetchTake,
+    };
+    if (skip > 0) {
+      args.skip = skip;
+    }
+    return prisma.videoLearningContent.findMany(args) as Promise<CandidateRecord[]>;
+  };
+
+  // Use FULLTEXT search with MATCH AGAINST for optimal performance
+  const searchQuery = trimmed.replace(/[+\-<>()~*"@]/g, ' ').trim();
+
+  if (searchQuery) {
+    const fulltextRecords = await prisma.$queryRaw<CandidateRecord[]>`
+      SELECT
+        id, video_name AS videoName, video_url AS videoUrl,
+        transcript_full AS transcriptFull, transcript_chunks AS transcriptChunks,
+        transcript_word_chunks, transcript_translation_chunks AS transcriptTranslationChunks,
+        duration_seconds AS durationSeconds, audio_level AS audioLevel
+      FROM video_learning_content
+      WHERE MATCH(transcript_full) AGAINST(${searchQuery} IN NATURAL LANGUAGE MODE)
+      ORDER BY processed_at DESC
+      LIMIT ${fetchTake}
+    `;
+    if (appendFromRecords(fulltextRecords)) {
+      return buildResult();
     }
   }
 
-  const returned = Math.min(snippets.length, snippetsLimit);
-  return { phrase: trimmed, items: snippets.slice(0, snippetsLimit), returned };
+  // Fallback to contains search if FULLTEXT doesn't yield enough results
+  if (snippets.length < snippetsLimit) {
+    const containsRecords = await fetchRecords({
+      transcriptFull: {
+        contains: trimmed,
+      },
+    });
+    if (appendFromRecords(containsRecords)) {
+      return buildResult();
+    }
+  }
+
+  const MAX_FALLBACK_BATCHES = 2;
+  for (let batch = 0; batch < MAX_FALLBACK_BATCHES && snippets.length < snippetsLimit; batch += 1) {
+    const fallbackRecords = await fetchRecords(undefined, batch * fetchTake);
+    if (!fallbackRecords.length) {
+      break;
+    }
+    if (appendFromRecords(fallbackRecords)) {
+      return buildResult();
+    }
+    if (fallbackRecords.length < fetchTake) {
+      break;
+    }
+  }
+
+  return buildResult();
 };
 
 const updateLikeStatus = async (userId: string, contentId: string, like: boolean): Promise<LikeStatus> => {

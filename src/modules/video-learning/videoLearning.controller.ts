@@ -68,9 +68,10 @@ export const searchPhrase = async (req: Request, res: Response) => {
   const query = phraseSearchQuerySchema.parse({
     phrase: req.query.phrase,
     limit: req.query.limit,
+    paddingSeconds: req.query.paddingSeconds,
   });
 
-  const result = await videoLearningService.searchPhrase(query.phrase, query.limit);
+  const result = await videoLearningService.searchPhrase(query.phrase, query.limit, query.paddingSeconds);
   res.json(result);
 };
 

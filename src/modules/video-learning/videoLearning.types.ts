@@ -87,6 +87,8 @@ export interface PhraseSnippet {
   phrase: string;
   durationSeconds: number | null;
   audioLevel?: number;
+  translationMatchedText?: string;
+  translationContextText?: string;
 }
 
 export interface PhraseSearchResult {
