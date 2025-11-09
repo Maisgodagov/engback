@@ -245,6 +245,8 @@ type PhraseMatch = {
 
 const DEFAULT_SNIPPET_LIMIT = 10;
 const MAX_SNIPPET_LIMIT = 50;
+const DEFAULT_SNIPPET_CAP = 30;
+const MAX_SNIPPET_CAP = 200;
 const CONTEXT_WINDOW = 4;
 const DEFAULT_PADDING_SECONDS = 1;
 const MAX_PADDING_SECONDS = 10;
@@ -300,6 +302,20 @@ const sanitizePaddingSeconds = (padding?: number): number => {
   const coerced = Math.trunc(padding as number);
   if (Number.isNaN(coerced) || coerced < 0) return DEFAULT_PADDING_SECONDS;
   return Math.min(coerced, MAX_PADDING_SECONDS);
+};
+
+const sanitizeSnippetCap = (cap?: number, fallback = DEFAULT_SNIPPET_CAP): number => {
+  if (!Number.isFinite(cap ?? Number.NaN)) return fallback;
+  const coerced = Math.trunc(cap as number);
+  if (Number.isNaN(coerced) || coerced <= 0) return fallback;
+  return Math.min(coerced, MAX_SNIPPET_CAP);
+};
+
+const sanitizeCursorOffset = (offset?: number): number => {
+  if (!Number.isFinite(offset ?? Number.NaN)) return 0;
+  const coerced = Math.trunc(offset as number);
+  if (Number.isNaN(coerced) || coerced < 0) return 0;
+  return coerced;
 };
 
 const adjustTopicPreferences = async (
@@ -712,10 +728,13 @@ const searchPhrase = async (
   phrase: string,
   limit?: number,
   paddingSeconds?: number,
+  cursor?: number,
+  maxSnippets?: number,
 ): Promise<PhraseSearchResult> => {
   const trimmed = (phrase ?? '').trim();
+  const pageSize = sanitizeSnippetLimit(limit);
   if (!trimmed) {
-    return { phrase: '', items: [], returned: 0 };
+    return { phrase: '', items: [], returned: 0, total: 0, hasMore: false, nextCursor: null, pageSize };
   }
 
   const tokens = trimmed
@@ -724,12 +743,13 @@ const searchPhrase = async (
     .filter((token) => token.length > 0);
 
   if (!tokens.length) {
-    return { phrase: trimmed, items: [], returned: 0 };
+    return { phrase: trimmed, items: [], returned: 0, total: 0, hasMore: false, nextCursor: null, pageSize };
   }
 
-  const snippetsLimit = sanitizeSnippetLimit(limit);
+  const snippetCap = Math.max(pageSize, sanitizeSnippetCap(maxSnippets));
+  const cursorOffset = Math.min(sanitizeCursorOffset(cursor), snippetCap);
   const snippetPadding = sanitizePaddingSeconds(paddingSeconds);
-  const fetchTake = Math.max(snippetsLimit * RECORD_FETCH_MULTIPLIER, snippetsLimit);
+  const fetchTake = Math.max(Math.ceil(snippetCap * RECORD_FETCH_MULTIPLIER), pageSize);
 
   const selectFields = {
     id: true,
@@ -850,7 +870,7 @@ const searchPhrase = async (
           translationContextText: translationContextText || undefined,
         });
 
-        if (snippets.length >= snippetsLimit) {
+        if (snippets.length >= snippetCap) {
           return true;
         }
       }
@@ -859,8 +879,22 @@ const searchPhrase = async (
   };
 
   const buildResult = () => {
-    const returned = Math.min(snippets.length, snippetsLimit);
-    return { phrase: trimmed, items: snippets.slice(0, snippetsLimit), returned };
+    const total = Math.min(snippets.length, snippetCap);
+    const start = Math.min(cursorOffset, total);
+    const pageItems = snippets.slice(start, start + pageSize);
+    const returned = pageItems.length;
+    const nextOffset = start + returned;
+    const hasMore = nextOffset < total;
+    const nextCursor = hasMore ? String(nextOffset) : null;
+    return {
+      phrase: trimmed,
+      items: pageItems,
+      returned,
+      total,
+      hasMore,
+      nextCursor,
+      pageSize,
+    };
   };
 
   const fetchRecords = async (
@@ -900,7 +934,7 @@ const searchPhrase = async (
   }
 
   // Fallback to contains search if FULLTEXT doesn't yield enough results
-  if (snippets.length < snippetsLimit) {
+  if (snippets.length < snippetCap) {
     const containsRecords = await fetchRecords({
       transcriptFull: {
         contains: trimmed,
@@ -912,7 +946,7 @@ const searchPhrase = async (
   }
 
   const MAX_FALLBACK_BATCHES = 2;
-  for (let batch = 0; batch < MAX_FALLBACK_BATCHES && snippets.length < snippetsLimit; batch += 1) {
+  for (let batch = 0; batch < MAX_FALLBACK_BATCHES && snippets.length < snippetCap; batch += 1) {
     const fallbackRecords = await fetchRecords(undefined, batch * fetchTake);
     if (!fallbackRecords.length) {
       break;

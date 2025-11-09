@@ -95,6 +95,10 @@ export interface PhraseSearchResult {
   items: PhraseSnippet[];
   phrase: string;
   returned: number;
+  total: number;
+  hasMore: boolean;
+  nextCursor: string | null;
+  pageSize: number;
 }
 
 export interface VideoFeedItem {

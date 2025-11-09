@@ -41,6 +41,22 @@ export const phraseSearchQuerySchema = z.object({
     })
     .pipe(z.number().int().min(0).max(10))
     .optional(),
+  cursor: z
+    .union([z.string(), z.number()])
+    .transform((value) => {
+      const numeric = typeof value === 'string' ? Number(value) : value;
+      return Number.isFinite(numeric) ? Math.trunc(numeric) : undefined;
+    })
+    .pipe(z.number().int().min(0))
+    .optional(),
+  maxSnippets: z
+    .union([z.string(), z.number()])
+    .transform((value) => {
+      const numeric = typeof value === 'string' ? Number(value) : value;
+      return Number.isFinite(numeric) ? Math.trunc(numeric) : undefined;
+    })
+    .pipe(z.number().int().min(1).max(200))
+    .optional(),
 });
 
 export type PhraseSearchQuery = z.infer<typeof phraseSearchQuerySchema>;

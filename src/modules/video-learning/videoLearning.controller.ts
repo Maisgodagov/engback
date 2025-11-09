@@ -69,9 +69,17 @@ export const searchPhrase = async (req: Request, res: Response) => {
     phrase: req.query.phrase,
     limit: req.query.limit,
     paddingSeconds: req.query.paddingSeconds,
+    cursor: req.query.cursor,
+    maxSnippets: req.query.maxSnippets,
   });
 
-  const result = await videoLearningService.searchPhrase(query.phrase, query.limit, query.paddingSeconds);
+  const result = await videoLearningService.searchPhrase(
+    query.phrase,
+    query.limit,
+    query.paddingSeconds,
+    query.cursor,
+    query.maxSnippets,
+  );
   res.json(result);
 };
 
