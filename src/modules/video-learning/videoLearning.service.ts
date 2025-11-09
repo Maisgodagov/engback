@@ -873,6 +873,9 @@ const searchPhrase = async (
         if (snippets.length >= snippetCap) {
           return true;
         }
+
+        // only keep a single snippet per video to avoid duplicate fragments from the same content
+        break;
       }
     }
     return false;
