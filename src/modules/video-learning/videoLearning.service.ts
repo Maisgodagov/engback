@@ -23,6 +23,7 @@ import type {
   UpdateTopicsInput,
   UpdateTranscriptChunksInput,
   UpdateTranslationChunksInput,
+  UpdateSubtitleChunkInput,
   UpdateExercisesInput,
   UpdateIsAdultContentInput,
   UpdateModerationStatusInput,
@@ -150,6 +151,12 @@ const sanitizeTranscriptChunksForStorage = (chunks: UpdateTranscriptChunksInput[
 
 const sanitizeTranslationChunksForStorage = (chunks: UpdateTranslationChunksInput['chunks']): SanitizedTranscriptChunk[] =>
   chunks.map((chunk) => ({
+    text: chunk.text.trim(),
+    timestamp: [Number(chunk.timestamp[0]), Number(chunk.timestamp[1])] as [number, number],
+  }));
+
+const sanitizeStoredChunks = (value: unknown): SanitizedTranscriptChunk[] =>
+  parseChunkArray(value).map((chunk) => ({
     text: chunk.text.trim(),
     timestamp: [Number(chunk.timestamp[0]), Number(chunk.timestamp[1])] as [number, number],
   }));
@@ -1213,6 +1220,66 @@ const updateTranslationChunks = async (
   return getContentOrThrow(String(numericId));
 };
 
+const updateSubtitleChunk = async (
+  id: string,
+  payload: UpdateSubtitleChunkInput,
+): Promise<ProcessedVideo> => {
+  const numericId = ensureContentNumericId(id);
+  const record = await prisma.videoLearningContent.findUnique({
+    where: { id: numericId },
+    select: {
+      transcriptChunks: true,
+      transcriptTranslationChunks: true,
+    },
+  });
+
+  if (!record) {
+    throw Object.assign(new Error('Video learning content not found'), { status: 404 });
+  }
+
+  const transcriptChunks = sanitizeStoredChunks(record.transcriptChunks);
+  if (!transcriptChunks.length) {
+    throw Object.assign(new Error('Transcript is empty'), { status: 400 });
+  }
+  if (payload.chunkIndex < 0 || payload.chunkIndex >= transcriptChunks.length) {
+    throw Object.assign(new Error('Transcript chunk not found'), { status: 404 });
+  }
+
+  const translationChunks = sanitizeStoredChunks(record.transcriptTranslationChunks);
+  const [replacementTranscript] = sanitizeTranscriptChunksForStorage([payload.transcript]);
+  const [replacementTranslation] = sanitizeTranslationChunksForStorage([payload.translation]);
+
+  const nextTranscriptChunks = [...transcriptChunks];
+  nextTranscriptChunks[payload.chunkIndex] = replacementTranscript;
+
+  const nextTranslationChunks = [...translationChunks];
+  while (nextTranslationChunks.length <= payload.chunkIndex) {
+    const placeholderIndex = nextTranslationChunks.length;
+    const fallbackTimestamp =
+      transcriptChunks[placeholderIndex]?.timestamp ?? replacementTranslation.timestamp;
+    const start = Number(fallbackTimestamp?.[0] ?? 0);
+    const endSource = Number(fallbackTimestamp?.[1] ?? fallbackTimestamp?.[0] ?? 0);
+    const end = Number.isFinite(endSource) && endSource >= start ? endSource : start;
+    nextTranslationChunks.push({
+      text: '',
+      timestamp: [start, end] as [number, number],
+    });
+  }
+  nextTranslationChunks[payload.chunkIndex] = replacementTranslation;
+
+  await prisma.videoLearningContent.update({
+    where: { id: numericId },
+    data: {
+      transcriptChunks: nextTranscriptChunks as unknown as Prisma.JsonArray,
+      transcriptFull: buildFullTextFromChunks(nextTranscriptChunks),
+      transcriptTranslationChunks: nextTranslationChunks as unknown as Prisma.JsonArray,
+      transcriptTranslationFull: buildFullTextFromChunks(nextTranslationChunks) || null,
+    },
+  });
+
+  return getContentOrThrow(String(numericId));
+};
+
 const updateExercises = async (id: string, payload: UpdateExercisesInput): Promise<ProcessedVideo> => {
   const numericId = ensureContentNumericId(id);
   const normalized = normalizeExercisesForStorage(payload.exercises);
@@ -1348,6 +1415,7 @@ export const videoLearningService = {
   updateTopics,
   updateTranscriptChunks,
   updateTranslationChunks,
+  updateSubtitleChunk,
   updateExercises,
   updateIsAdultContent,
   updateModerationStatus,

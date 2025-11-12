@@ -16,6 +16,7 @@ videoLearningRouter.patch('/:id/moderation/vocabulary', requireAdmin, controller
 videoLearningRouter.patch('/:id/moderation/topics', requireAdmin, controller.updateTopics);
 videoLearningRouter.patch('/:id/moderation/transcript', requireAdmin, controller.updateTranscriptChunks);
 videoLearningRouter.patch('/:id/moderation/translation', requireAdmin, controller.updateTranslationChunks);
+videoLearningRouter.patch('/:id/moderation/subtitles/chunk', requireAdmin, controller.updateSubtitleChunk);
 videoLearningRouter.patch('/:id/moderation/exercises', requireAdmin, controller.updateExercises);
 videoLearningRouter.patch('/:id/moderation/adult', requireAdmin, controller.updateIsAdultContent);
 videoLearningRouter.patch('/:id/moderation/status', requireAdmin, controller.updateModerationStatus);

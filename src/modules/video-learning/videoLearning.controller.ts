@@ -13,6 +13,7 @@ import {
   updateTopicsSchema,
   updateTranscriptChunksSchema,
   updateTranslationChunksSchema,
+  updateSubtitleChunkSchema,
   updateExercisesSchema,
   updateIsAdultContentSchema,
   updateModerationStatusSchema,
@@ -177,6 +178,13 @@ export const updateTranslationChunks = async (req: Request, res: Response) => {
   const params = contentIdParamSchema.parse({ id: req.params.id });
   const body = updateTranslationChunksSchema.parse(req.body);
   const result = await videoLearningService.updateTranslationChunks(params.id, body);
+  res.json(result);
+};
+
+export const updateSubtitleChunk = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const body = updateSubtitleChunkSchema.parse(req.body);
+  const result = await videoLearningService.updateSubtitleChunk(params.id, body);
   res.json(result);
 };
 

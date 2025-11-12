@@ -126,6 +126,12 @@ export const updateTranslationChunksSchema = z.object({
   chunks: z.array(translationChunkSchema).min(1),
 });
 
+export const updateSubtitleChunkSchema = z.object({
+  chunkIndex: z.number().int().min(0),
+  transcript: transcriptChunkSchema,
+  translation: translationChunkSchema,
+});
+
 export const updateExercisesSchema = z
   .object({
     exercises: z.array(baseExerciseSchema).max(50),
@@ -166,6 +172,7 @@ export type UpdateVocabularyComplexityInput = z.infer<typeof updateVocabularyCom
 export type UpdateTopicsInput = z.infer<typeof updateTopicsSchema>;
 export type UpdateTranscriptChunksInput = z.infer<typeof updateTranscriptChunksSchema>;
 export type UpdateTranslationChunksInput = z.infer<typeof updateTranslationChunksSchema>;
+export type UpdateSubtitleChunkInput = z.infer<typeof updateSubtitleChunkSchema>;
 export type UpdateExercisesInput = z.infer<typeof updateExercisesSchema>;
 export type UpdateIsAdultContentInput = z.infer<typeof updateIsAdultContentSchema>;
 export type UpdateModerationStatusInput = z.infer<typeof updateModerationStatusSchema>;
