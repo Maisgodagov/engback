@@ -53,7 +53,7 @@ type ContentRecord = {
   isModerated: boolean;
 };
 
-const parseChunkArray = (value: unknown): TranscriptWordChunk[] => {
+export const parseChunkArray = (value: unknown): TranscriptWordChunk[] => {
   if (!Array.isArray(value)) return [];
 
   return (value as unknown[]).map((chunk) => {
@@ -258,7 +258,7 @@ const CONTEXT_WINDOW = 4;
 const DEFAULT_PADDING_SECONDS = 1;
 const MAX_PADDING_SECONDS = 10;
 const TOKEN_CONTEXT_WINDOW = 6;
-const TOKEN_INSERT_BATCH_SIZE = 1000;
+const TOKEN_INSERT_BATCH_SIZE = 250;
 const TOKEN_TEXT_LIMIT = 120;
 const TOKEN_CANDIDATE_BATCH_SIZE = 200;
 const MAX_TOKEN_CANDIDATE_BATCHES = 20;
@@ -1050,7 +1050,7 @@ const tokenRowsToChunks = (tokens: VideoTranscriptToken[]): TranscriptWordChunk[
     };
   });
 
-const persistTranscriptTokens = async (
+export const persistTranscriptTokens = async (
   contentId: number,
   wordChunks: TranscriptWordChunk[],
 ): Promise<void> => {
@@ -1075,16 +1075,14 @@ const persistTranscriptTokens = async (
     };
   });
 
-  await prisma.$transaction(async (tx) => {
-    await tx.videoTranscriptToken.deleteMany({ where: { contentId } });
-    const batches = chunkArray(payload, TOKEN_INSERT_BATCH_SIZE);
-    for (const batch of batches) {
-      if (!batch.length) continue;
-      await tx.videoTranscriptToken.createMany({
-        data: batch,
-      });
-    }
-  });
+  await prisma.videoTranscriptToken.deleteMany({ where: { contentId } });
+  const batches = chunkArray(payload, TOKEN_INSERT_BATCH_SIZE);
+  for (const batch of batches) {
+    if (!batch.length) continue;
+    await prisma.videoTranscriptToken.createMany({
+      data: batch,
+    });
+  }
 };
 
 const ensureTranscriptTokensForContent = async (contentId: number): Promise<void> => {
@@ -1145,16 +1143,71 @@ const fetchTokenCandidates = async (
   `;
 };
 
+const getTokenFrequencies = async (tokens: string[]): Promise<Map<string, number>> => {
+  if (!tokens.length) return new Map();
+  const rows = await prisma.$queryRaw<Array<{ token: string; count: bigint }>>`
+    SELECT token_normalized AS token, COUNT(*) AS count
+    FROM video_transcript_tokens
+    WHERE token_normalized IN (${Prisma.join(tokens)})
+    GROUP BY token_normalized
+  `;
+  const map = new Map<string, number>();
+  rows.forEach((row) => {
+    map.set(row.token, Number(row.count));
+  });
+  return map;
+};
+
+const selectAnchorToken = async (
+  normalizedTokens: string[],
+): Promise<{ token: string; offset: number } | null> => {
+  if (!normalizedTokens.length) return null;
+  const uniqueTokens = Array.from(new Set(normalizedTokens));
+  const frequencies = await getTokenFrequencies(uniqueTokens);
+  if (frequencies.size === 0) {
+    return null;
+  }
+  for (const token of uniqueTokens) {
+    if (!frequencies.has(token)) {
+      return null;
+    }
+  }
+  let bestToken = normalizedTokens[0];
+  let bestOffset = 0;
+  let bestFrequency = frequencies.get(bestToken) ?? Number.MAX_SAFE_INTEGER;
+  normalizedTokens.forEach((token, index) => {
+    const frequency = frequencies.get(token) ?? Number.MAX_SAFE_INTEGER;
+    if (frequency < bestFrequency) {
+      bestFrequency = frequency;
+      bestToken = token;
+      bestOffset = index;
+    }
+  });
+  if (!Number.isFinite(bestFrequency) || bestFrequency === Number.MAX_SAFE_INTEGER) {
+    return null;
+  }
+  return {
+    token: bestToken,
+    offset: bestOffset,
+  };
+};
+
 const resolveCandidateMatch = async (
   candidate: TokenCandidateRow,
   normalizedTokens: string[],
+  anchorOffset: number,
   ensuredContents: Set<number>,
 ): Promise<CandidateMatch | null> => {
   const phraseLength = normalizedTokens.length;
   if (!phraseLength) return null;
 
-  const windowStart = Math.max(0, candidate.position - TOKEN_CONTEXT_WINDOW);
-  const windowEnd = candidate.position + phraseLength - 1 + TOKEN_CONTEXT_WINDOW;
+  const targetStartPosition = candidate.position - anchorOffset;
+  if (targetStartPosition < 0) {
+    return null;
+  }
+
+  const windowStart = Math.max(0, targetStartPosition - TOKEN_CONTEXT_WINDOW);
+  const windowEnd = targetStartPosition + phraseLength - 1 + TOKEN_CONTEXT_WINDOW;
   let tokens = await fetchTokenSlice(candidate.contentId, windowStart, windowEnd);
   if (!tokens.length && !ensuredContents.has(candidate.contentId)) {
     await ensureTranscriptTokensForContent(candidate.contentId);
@@ -1163,28 +1216,27 @@ const resolveCandidateMatch = async (
   }
   if (!tokens.length) return null;
 
-  const startIndex = tokens.findIndex((token) => token.position === candidate.position);
-  if (startIndex === -1) return null;
-
-  const searchable = tokens
-    .map((token, index) => ({
-      index,
-      normalized: (token.tokenNormalized ?? '').trim(),
-    }))
-    .filter((entry) => entry.normalized.length > 0);
-
-  const searchableStart = searchable.findIndex((entry) => entry.index === startIndex);
-  if (searchableStart === -1) return null;
-
+  const tokensByPosition = new Map(tokens.map((token) => [token.position, token]));
   for (let i = 0; i < phraseLength; i += 1) {
-    const entry = searchable[searchableStart + i];
-    if (!entry || entry.normalized !== normalizedTokens[i]) {
+    const position = targetStartPosition + i;
+    const token = tokensByPosition.get(position);
+    if (!token) {
+      return null;
+    }
+    const normalized = (token.tokenNormalized ?? '').trim();
+    if (!normalized || normalized !== normalizedTokens[i]) {
       return null;
     }
   }
 
-  const matchStartIndex = searchable[searchableStart].index;
-  const matchEndIndex = searchable[searchableStart + phraseLength - 1].index;
+  const matchStartPosition = targetStartPosition;
+  const matchEndPosition = targetStartPosition + phraseLength - 1;
+  const matchStartIndex = tokens.findIndex((token) => token.position === matchStartPosition);
+  const matchEndIndex = tokens.findIndex((token) => token.position === matchEndPosition);
+  if (matchStartIndex === -1 || matchEndIndex === -1) {
+    return null;
+  }
+
   const windowChunks = tokenRowsToChunks(tokens);
   const matchedChunks = windowChunks.slice(matchStartIndex, matchEndIndex + 1);
   if (!matchedChunks.length) return null;
@@ -1194,8 +1246,8 @@ const resolveCandidateMatch = async (
 
   return {
     contentId: candidate.contentId,
-    matchStartPosition: tokens[matchStartIndex]?.position ?? candidate.position,
-    matchEndPosition: tokens[matchEndIndex]?.position ?? candidate.position,
+    matchStartPosition,
+    matchEndPosition,
     windowChunks,
     matchStartIndex,
     matchEndIndex,
@@ -1369,6 +1421,11 @@ const searchPhrase = async (
   const cursorOffset = Math.min(sanitizeCursorOffset(cursor), snippetCap);
   const snippetPadding = sanitizePaddingSeconds(paddingSeconds);
 
+  const anchor = await selectAnchorToken(normalizedTokens);
+  if (!anchor) {
+    return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
+  }
+
   const snippets: PhraseSnippet[] = [];
   const processedContentIds = new Set<number>();
   const ensuredContents = new Set<number>();
@@ -1378,11 +1435,7 @@ const searchPhrase = async (
   let batchCount = 0;
 
   while (snippets.length < snippetCap && batchCount < MAX_TOKEN_CANDIDATE_BATCHES) {
-    const candidates = await fetchTokenCandidates(
-      normalizedTokens[0],
-      TOKEN_CANDIDATE_BATCH_SIZE,
-      candidateCursor,
-    );
+    const candidates = await fetchTokenCandidates(anchor.token, TOKEN_CANDIDATE_BATCH_SIZE, candidateCursor);
     batchCount += 1;
 
     if (!candidates.length) {
@@ -1395,7 +1448,12 @@ const searchPhrase = async (
         continue;
       }
 
-      const match = await resolveCandidateMatch(candidate, normalizedTokens, ensuredContents);
+      const match = await resolveCandidateMatch(
+        candidate,
+        normalizedTokens,
+        anchor.offset,
+        ensuredContents,
+      );
       if (!match) {
         continue;
       }
@@ -1423,7 +1481,7 @@ const searchPhrase = async (
 
   if (!snippets.length) {
     triggerTranscriptTokenBackfill();
-    return searchPhraseLegacy(phrase, limit, paddingSeconds, cursor, maxSnippets);
+    return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
   }
 
   return paginateSnippets(trimmed, snippets, pageSize, cursorOffset, snippetCap);
