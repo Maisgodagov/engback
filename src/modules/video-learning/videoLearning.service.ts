@@ -1,4 +1,10 @@
-import { Prisma, VideoLearningStatus, VideoTranscriptToken } from '@prisma/client';
+import {
+  Prisma,
+  VideoLearningStatus,
+  VideoTranscriptToken,
+  VideoLearningContentCefrLevel,
+  VideoLearningContentSpeechSpeed,
+} from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 
 import { prisma } from '../../shared/prisma/prismaClient';
@@ -264,6 +270,8 @@ const TOKEN_CANDIDATE_BATCH_SIZE = 200;
 const MAX_TOKEN_CANDIDATE_BATCHES = 200;
 const FULLTEXT_CANDIDATE_LIMIT = 500;
 const RANDOM_PRIORITY_JITTER = 12;
+const UNWATCHED_POOL_MULTIPLIER = 6;
+const WATCHED_POOL_MULTIPLIER = 3;
 const TRANSCRIPT_BACKFILL_BATCH_SIZE = 200;
 const RECORD_FETCH_MULTIPLIER = 1.5;
 
@@ -588,56 +596,77 @@ const computeRecommendationScores = async (
     : null;
 
   // Build optimized where clause with filters
-  const whereClause: any = {
-    id: excludeIds.size > 0 ? { notIn: Array.from(excludeIds) } : undefined,
-  };
+  const baseWhere: Prisma.VideoLearningContentWhereInput = {};
 
   if (allowedLevels && allowedLevels.length > 0) {
-    whereClause.cefrLevel = { in: allowedLevels };
+    baseWhere.cefrLevel = { in: allowedLevels as VideoLearningContentCefrLevel[] };
   }
 
   if (allowedSpeeds && allowedSpeeds.length > 0) {
-    whereClause.speechSpeed = { in: allowedSpeeds };
+    baseWhere.speechSpeed = { in: allowedSpeeds as VideoLearningContentSpeechSpeed[] };
   }
 
   if (showAdultContent === false) {
-    whereClause.isAdultContent = false;
+    baseWhere.isAdultContent = false;
   }
 
   // Handle moderation filter
   const effectiveModerationFilter = isAdmin ? (moderationFilter ?? 'all') : 'moderated';
   if (effectiveModerationFilter === 'moderated') {
-    whereClause.isModerated = true;
+    baseWhere.isModerated = true;
   } else if (effectiveModerationFilter === 'unmoderated') {
-    whereClause.isModerated = false;
+    baseWhere.isModerated = false;
   }
 
+  const buildNotInFilter = (...sets: Set<number>[]) => {
+    const combined = new Set<number>();
+    sets.forEach((set) => set.forEach((value) => combined.add(value)));
+    return combined.size > 0 ? Array.from(combined) : null;
+  };
+
+  const fetchRandomizedPool = async (
+    where: Prisma.VideoLearningContentWhereInput,
+    poolMultiplier: number,
+  ) => {
+    const total = await prisma.videoLearningContent.count({ where });
+    if (total === 0) return [];
+    const desired = Math.max(requestLimit * poolMultiplier, requestLimit);
+    const take = Math.min(desired, total);
+    const maxSkip = Math.max(total - take, 0);
+    const skip = maxSkip > 0 ? Math.floor(Math.random() * (maxSkip + 1)) : 0;
+
+    return prisma.videoLearningContent.findMany({
+      where,
+      include: {
+        videoTopics: { select: { topic: true } },
+      },
+      skip,
+      take,
+    });
+  };
+
   // Fetch unwatched videos first (prioritize fresh content)
-  // Fetch more videos for better randomization pool
-  const unwatchedVideos = await prisma.videoLearningContent.findMany({
-    where: {
-      ...whereClause,
-      id: watchedSet.size > 0 ? { notIn: Array.from(watchedSet), ...whereClause.id } : whereClause.id,
-    },
-    include: {
-      videoTopics: { select: { topic: true } },
-    },
-    take: Math.max(requestLimit * 5, 50), // Fetch 5x limit for better randomization
-  });
+  const unwatchedIdFilter = buildNotInFilter(excludeIds, watchedSet);
+  const unwatchedWhere: Prisma.VideoLearningContentWhereInput = {
+    ...baseWhere,
+    id: unwatchedIdFilter ? { notIn: unwatchedIdFilter } : baseWhere.id,
+  };
+  const unwatchedVideos = await fetchRandomizedPool(unwatchedWhere, UNWATCHED_POOL_MULTIPLIER);
 
   // Fetch watched videos as fallback (if user watched everything)
-  const watchedVideos = unwatchedVideos.length < requestLimit && watchedSet.size > 0
-    ? await prisma.videoLearningContent.findMany({
-        where: {
-          ...whereClause,
-          id: { in: Array.from(watchedSet), ...whereClause.id },
+  let watchedVideos: typeof unwatchedVideos = [];
+  if (unwatchedVideos.length < requestLimit && watchedSet.size > 0) {
+    const watchedIds = Array.from(watchedSet).filter((id) => !excludeIds.has(id));
+    if (watchedIds.length > 0) {
+      watchedVideos = await fetchRandomizedPool(
+        {
+          ...baseWhere,
+          id: { in: watchedIds },
         },
-        include: {
-          videoTopics: { select: { topic: true } },
-        },
-        take: Math.max(requestLimit * 2, 20), // Fetch extra for randomization
-      })
-    : [];
+        WATCHED_POOL_MULTIPLIER,
+      );
+    }
+  }
 
   // Shuffle arrays for randomization (Fisher-Yates algorithm)
   const shuffleArray = <T>(array: T[]): T[] => {
