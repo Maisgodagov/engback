@@ -1165,12 +1165,17 @@ const fetchTokenCandidates = async (
   `;
 };
 
-const getTokenFrequencies = async (tokens: string[]): Promise<Map<string, number>> => {
+const getTokenFrequencies = async (tokens: string[], allowedContentIds?: number[] | null): Promise<Map<string, number>> => {
   if (!tokens.length) return new Map();
+  const allowedClause =
+    allowedContentIds && allowedContentIds.length > 0
+      ? Prisma.sql`AND content_id IN (${Prisma.join(allowedContentIds)})`
+      : Prisma.sql``;
   const rows = await prisma.$queryRaw<Array<{ token: string; count: bigint }>>`
     SELECT token_normalized AS token, COUNT(*) AS count
     FROM video_transcript_tokens
     WHERE token_normalized IN (${Prisma.join(tokens)})
+    ${allowedClause}
     GROUP BY token_normalized
   `;
   const map = new Map<string, number>();
@@ -1182,10 +1187,11 @@ const getTokenFrequencies = async (tokens: string[]): Promise<Map<string, number
 
 const selectAnchorToken = async (
   normalizedTokens: string[],
+  allowedContentIds?: number[] | null,
 ): Promise<{ token: string; offset: number } | null> => {
   if (!normalizedTokens.length) return null;
   const uniqueTokens = Array.from(new Set(normalizedTokens));
-  const frequencies = await getTokenFrequencies(uniqueTokens);
+  const frequencies = await getTokenFrequencies(uniqueTokens, allowedContentIds);
   if (frequencies.size === 0) {
     return null;
   }
@@ -1401,6 +1407,79 @@ const triggerTranscriptTokenBackfill = (): void => {
     });
 };
 
+const runTokenSearch = async (
+  normalizedTokens: string[],
+  trimmedPhrase: string,
+  snippetPadding: number,
+  snippetCap: number,
+  allowedContentIds: number[] | null,
+): Promise<PhraseSnippet[]> => {
+  const anchor = await selectAnchorToken(normalizedTokens, allowedContentIds);
+  if (!anchor) {
+    return [];
+  }
+
+  const snippets: PhraseSnippet[] = [];
+  const processedContentIds = new Set<number>();
+  const ensuredContents = new Set<number>();
+  const metadataCache = new Map<number, SnippetContentRecord>();
+
+  let candidateCursor: TokenCandidateRow | null = null;
+  let batchCount = 0;
+
+  while (snippets.length < snippetCap && batchCount < MAX_TOKEN_CANDIDATE_BATCHES) {
+    const candidates = await fetchTokenCandidates(
+      anchor.token,
+      TOKEN_CANDIDATE_BATCH_SIZE,
+      candidateCursor,
+      allowedContentIds,
+    );
+    batchCount += 1;
+
+    if (!candidates.length) {
+      break;
+    }
+
+    for (const candidate of candidates) {
+      candidateCursor = candidate;
+      if (processedContentIds.has(candidate.contentId)) {
+        continue;
+      }
+
+      const match = await resolveCandidateMatch(
+        candidate,
+        normalizedTokens,
+        anchor.offset,
+        ensuredContents,
+      );
+      if (!match) {
+        continue;
+      }
+
+      const snippet = await buildSnippetFromMatch(
+        match,
+        { phrase: trimmedPhrase, snippetPadding },
+        metadataCache,
+      );
+      if (!snippet) {
+        continue;
+      }
+
+      snippets.push(snippet);
+      processedContentIds.add(candidate.contentId);
+      if (snippets.length >= snippetCap) {
+        break;
+      }
+    }
+
+    if (candidates.length < TOKEN_CANDIDATE_BATCH_SIZE) {
+      break;
+    }
+  }
+
+  return snippets;
+};
+
 const searchPhrase = async (
   phrase: string,
   limit?: number,
@@ -1448,67 +1527,21 @@ const searchPhrase = async (
     : [];
   const allowedContentIds = candidateIdsByFulltext.length > 0 ? candidateIdsByFulltext : null;
 
-  const anchor = await selectAnchorToken(normalizedTokens);
-  if (!anchor) {
+  let snippets = await runTokenSearch(
+    normalizedTokens,
+    trimmed,
+    snippetPadding,
+    snippetCap,
+    allowedContentIds,
+  );
+
+  if (!snippets.length && !allowedContentIds) {
+    triggerTranscriptTokenBackfill();
     return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
   }
 
-  const snippets: PhraseSnippet[] = [];
-  const processedContentIds = new Set<number>();
-  const ensuredContents = new Set<number>();
-  const metadataCache = new Map<number, SnippetContentRecord>();
-
-  let candidateCursor: TokenCandidateRow | null = null;
-  let batchCount = 0;
-
-  while (snippets.length < snippetCap && batchCount < MAX_TOKEN_CANDIDATE_BATCHES) {
-    const candidates = await fetchTokenCandidates(
-      anchor.token,
-      TOKEN_CANDIDATE_BATCH_SIZE,
-      candidateCursor,
-      allowedContentIds,
-    );
-    batchCount += 1;
-
-    if (!candidates.length) {
-      break;
-    }
-
-    for (const candidate of candidates) {
-      candidateCursor = candidate;
-      if (processedContentIds.has(candidate.contentId)) {
-        continue;
-      }
-
-      const match = await resolveCandidateMatch(
-        candidate,
-        normalizedTokens,
-        anchor.offset,
-        ensuredContents,
-      );
-      if (!match) {
-        continue;
-      }
-
-      const snippet = await buildSnippetFromMatch(
-        match,
-        { phrase: trimmed, snippetPadding },
-        metadataCache,
-      );
-      if (!snippet) {
-        continue;
-      }
-
-      snippets.push(snippet);
-      processedContentIds.add(candidate.contentId);
-      if (snippets.length >= snippetCap) {
-        break;
-      }
-    }
-
-    if (candidates.length < TOKEN_CANDIDATE_BATCH_SIZE) {
-      break;
-    }
+  if (!snippets.length && allowedContentIds) {
+    snippets = await runTokenSearch(normalizedTokens, trimmed, snippetPadding, snippetCap, null);
   }
 
   if (!snippets.length) {
