@@ -261,7 +261,8 @@ const TOKEN_CONTEXT_WINDOW = 6;
 const TOKEN_INSERT_BATCH_SIZE = 250;
 const TOKEN_TEXT_LIMIT = 120;
 const TOKEN_CANDIDATE_BATCH_SIZE = 200;
-const MAX_TOKEN_CANDIDATE_BATCHES = 20;
+const MAX_TOKEN_CANDIDATE_BATCHES = 200;
+const FULLTEXT_CANDIDATE_LIMIT = 500;
 const TRANSCRIPT_BACKFILL_BATCH_SIZE = 200;
 const RECORD_FETCH_MULTIPLIER = 1.5;
 
@@ -1122,10 +1123,26 @@ const fetchTokenSlice = async (
   });
 };
 
+const fetchCandidateIdsByFulltext = async (
+  searchQuery: string,
+  limit: number,
+): Promise<number[]> => {
+  if (!searchQuery) return [];
+  const rows = await prisma.$queryRaw<Array<{ id: number }>>`
+    SELECT id
+    FROM video_learning_content
+    WHERE MATCH(transcript_full) AGAINST(${searchQuery} IN NATURAL LANGUAGE MODE)
+    ORDER BY processed_at DESC
+    LIMIT ${limit}
+  `;
+  return rows.map((row) => row.id);
+};
+
 const fetchTokenCandidates = async (
   normalizedToken: string,
   batchSize: number,
   lastCandidate?: TokenCandidateRow | null,
+  allowedContentIds?: number[] | null,
 ): Promise<TokenCandidateRow[]> => {
   if (!normalizedToken) {
     return [];
@@ -1133,11 +1150,16 @@ const fetchTokenCandidates = async (
   const cursorClause = lastCandidate
     ? Prisma.sql`AND (content_id < ${lastCandidate.contentId} OR (content_id = ${lastCandidate.contentId} AND position > ${lastCandidate.position}))`
     : Prisma.sql``;
+  const allowedClause =
+    allowedContentIds && allowedContentIds.length > 0
+      ? Prisma.sql`AND content_id IN (${Prisma.join(allowedContentIds)})`
+      : Prisma.sql``;
   return prisma.$queryRaw<TokenCandidateRow[]>`
     SELECT content_id AS contentId, position
     FROM video_transcript_tokens
     WHERE token_normalized = ${normalizedToken}
     ${cursorClause}
+    ${allowedClause}
     ORDER BY content_id DESC, position ASC
     LIMIT ${batchSize}
   `;
@@ -1420,6 +1442,11 @@ const searchPhrase = async (
   const snippetCap = Math.max(pageSize, sanitizeSnippetCap(maxSnippets));
   const cursorOffset = Math.min(sanitizeCursorOffset(cursor), snippetCap);
   const snippetPadding = sanitizePaddingSeconds(paddingSeconds);
+  const searchQuery = trimmed.replace(/[+\-<>()~*"@]/g, ' ').trim();
+  const candidateIdsByFulltext = searchQuery
+    ? await fetchCandidateIdsByFulltext(searchQuery, FULLTEXT_CANDIDATE_LIMIT)
+    : [];
+  const allowedContentIds = candidateIdsByFulltext.length > 0 ? candidateIdsByFulltext : null;
 
   const anchor = await selectAnchorToken(normalizedTokens);
   if (!anchor) {
@@ -1435,7 +1462,12 @@ const searchPhrase = async (
   let batchCount = 0;
 
   while (snippets.length < snippetCap && batchCount < MAX_TOKEN_CANDIDATE_BATCHES) {
-    const candidates = await fetchTokenCandidates(anchor.token, TOKEN_CANDIDATE_BATCH_SIZE, candidateCursor);
+    const candidates = await fetchTokenCandidates(
+      anchor.token,
+      TOKEN_CANDIDATE_BATCH_SIZE,
+      candidateCursor,
+      allowedContentIds,
+    );
     batchCount += 1;
 
     if (!candidates.length) {
