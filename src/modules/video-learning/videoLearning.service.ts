@@ -263,6 +263,7 @@ const TOKEN_TEXT_LIMIT = 120;
 const TOKEN_CANDIDATE_BATCH_SIZE = 200;
 const MAX_TOKEN_CANDIDATE_BATCHES = 200;
 const FULLTEXT_CANDIDATE_LIMIT = 500;
+const RANDOM_PRIORITY_JITTER = 12;
 const TRANSCRIPT_BACKFILL_BATCH_SIZE = 200;
 const RECORD_FETCH_MULTIPLIER = 1.5;
 
@@ -663,7 +664,9 @@ const computeRecommendationScores = async (
     const likedBoost = likedSet.has(record.id) ? 30 : 0;
     const watchedPenalty = isWatched ? 25 : 0;
 
-    return topicScore * 12 + popularityScore * 5 + likedBoost - watchedPenalty;
+    const baseScore = topicScore * 12 + popularityScore * 5 + likedBoost - watchedPenalty;
+    const randomJitter = Math.random() * RANDOM_PRIORITY_JITTER;
+    return baseScore + randomJitter;
   };
 
   // Use randomized arrays instead of original
