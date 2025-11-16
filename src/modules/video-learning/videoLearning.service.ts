@@ -59,6 +59,10 @@ type ContentRecord = {
   isModerated: boolean;
 };
 
+type PoolRecord = Prisma.VideoLearningContentGetPayload<{
+  include: { videoTopics: { select: { topic: true } } };
+}>;
+
 export const parseChunkArray = (value: unknown): TranscriptWordChunk[] => {
   if (!Array.isArray(value)) return [];
 
@@ -631,18 +635,46 @@ const computeRecommendationScores = async (
     const total = await prisma.videoLearningContent.count({ where });
     if (total === 0) return [];
     const desired = Math.max(requestLimit * poolMultiplier, requestLimit);
-    const take = Math.min(desired, total);
-    const maxSkip = Math.max(total - take, 0);
-    const skip = maxSkip > 0 ? Math.floor(Math.random() * (maxSkip + 1)) : 0;
+    const takeLimit = Math.min(desired, total);
+    const chunkSize = Math.max(Math.ceil(requestLimit / 2), 5);
+    const maxAttempts = Math.min(12, Math.ceil(takeLimit / chunkSize) * 3);
+    const poolMap = new Map<number, PoolRecord>();
 
-    return prisma.videoLearningContent.findMany({
-      where,
-      include: {
-        videoTopics: { select: { topic: true } },
-      },
-      skip,
-      take,
-    });
+    for (let attempt = 0; attempt < maxAttempts && poolMap.size < takeLimit; attempt += 1) {
+      const remaining = total - chunkSize;
+      const skip =
+        remaining > 0 ? Math.floor(Math.random() * Math.max(remaining, 1)) : 0;
+      const chunk = await prisma.videoLearningContent.findMany({
+        where,
+        include: {
+          videoTopics: { select: { topic: true } },
+        },
+        skip,
+        take: Math.min(chunkSize, takeLimit - poolMap.size),
+      });
+      chunk.forEach((record) => {
+        if (!poolMap.has(record.id)) {
+          poolMap.set(record.id, record);
+        }
+      });
+    }
+
+    if (poolMap.size < takeLimit) {
+      const fallback = await prisma.videoLearningContent.findMany({
+        where,
+        include: {
+          videoTopics: { select: { topic: true } },
+        },
+        take: takeLimit - poolMap.size,
+      });
+      fallback.forEach((record) => {
+        if (!poolMap.has(record.id)) {
+          poolMap.set(record.id, record);
+        }
+      });
+    }
+
+    return Array.from(poolMap.values()).slice(0, takeLimit);
   };
 
   // Fetch unwatched videos first (prioritize fresh content)
