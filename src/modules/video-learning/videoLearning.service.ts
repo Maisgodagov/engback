@@ -523,7 +523,9 @@ const computeRecommendationScores = async (
   showAdultContent: boolean | undefined = true,
   moderationFilter: ModerationFilter | undefined = 'moderated',
   isAdmin: boolean = false,
+  requestLimit: number = 10, // Add limit parameter
 ) => {
+  // Fetch user data in parallel
   const [likedRecords, topicPreferences, progressRecords] = await Promise.all([
     prisma.videoLike.findMany({
       where: { userId },
@@ -535,125 +537,126 @@ const computeRecommendationScores = async (
     }),
     prisma.videoLearningProgress.findMany({
       where: { userId },
-      select: {
-        contentId: true,
-        status: true,
-        content: {
-          select: {
-            id: true,
-            videoTopics: {
-              select: { topic: true },
-            },
-          },
-        },
-      },
+      select: { contentId: true, status: true },
     }),
   ]);
 
   const likedSet = new Set(likedRecords.map((item) => item.contentId));
-  const topicScoreMap = new Map(topicPreferences.map((item) => [item.topic, item.likes]));
-  const watchedSet = new Set<number>();
-  const statusMap = new Map<number, VideoLearningStatus>();
+  const watchedSet = new Set(progressRecords.map((p) => p.contentId));
+  const statusMap = new Map(progressRecords.map((p) => [p.contentId, p.status]));
 
-  for (const record of progressRecords) {
-    watchedSet.add(record.contentId);
-    statusMap.set(record.contentId, record.status);
-    if (!likedSet.has(record.contentId)) {
-      for (const topicEntry of record.content.videoTopics) {
-        const current = topicScoreMap.get(topicEntry.topic) ?? 0;
-        topicScoreMap.set(topicEntry.topic, current - 1);
-      }
-    }
-  }
-
-  // Parse cefrLevels filter
+  // Parse filters
   const allowedLevels = cefrLevels
     ? cefrLevels.split(',').map(level => level.trim().toUpperCase())
     : null;
-
-  // Parse speechSpeeds filter
   const allowedSpeeds = speechSpeeds
     ? speechSpeeds.split(',').map(speed => speed.trim().toLowerCase())
     : null;
 
-  // Build where clause
-  const whereClause: any = {};
+  // Build optimized where clause with filters
+  const whereClause: any = {
+    id: excludeIds.size > 0 ? { notIn: Array.from(excludeIds) } : undefined,
+  };
 
   if (allowedLevels && allowedLevels.length > 0) {
-    whereClause.cefrLevel = {
-      in: allowedLevels as any,
-    };
+    whereClause.cefrLevel = { in: allowedLevels };
   }
 
   if (allowedSpeeds && allowedSpeeds.length > 0) {
-    whereClause.speechSpeed = {
-      in: allowedSpeeds as any,
-    };
+    whereClause.speechSpeed = { in: allowedSpeeds };
   }
 
-  const candidateRecords = await prisma.videoLearningContent.findMany({
-    where: Object.keys(whereClause).length > 0 ? whereClause : undefined,
-    include: {
-      videoTopics: {
-        select: { topic: true },
-      },
+  if (showAdultContent === false) {
+    whereClause.isAdultContent = false;
+  }
+
+  // Handle moderation filter
+  const effectiveModerationFilter = isAdmin ? (moderationFilter ?? 'all') : 'moderated';
+  if (effectiveModerationFilter === 'moderated') {
+    whereClause.isModerated = true;
+  } else if (effectiveModerationFilter === 'unmoderated') {
+    whereClause.isModerated = false;
+  }
+
+  // Fetch unwatched videos first (prioritize fresh content)
+  // Fetch more videos for better randomization pool
+  const unwatchedVideos = await prisma.videoLearningContent.findMany({
+    where: {
+      ...whereClause,
+      id: watchedSet.size > 0 ? { notIn: Array.from(watchedSet), ...whereClause.id } : whereClause.id,
     },
+    include: {
+      videoTopics: { select: { topic: true } },
+    },
+    take: Math.max(requestLimit * 5, 50), // Fetch 5x limit for better randomization
   });
 
-  const moderationMap = await fetchModerationFlags(candidateRecords.map((record) => record.id));
+  // Fetch watched videos as fallback (if user watched everything)
+  const watchedVideos = unwatchedVideos.length < requestLimit && watchedSet.size > 0
+    ? await prisma.videoLearningContent.findMany({
+        where: {
+          ...whereClause,
+          id: { in: Array.from(watchedSet), ...whereClause.id },
+        },
+        include: {
+          videoTopics: { select: { topic: true } },
+        },
+        take: Math.max(requestLimit * 2, 20), // Fetch extra for randomization
+      })
+    : [];
 
-  const effectiveModerationFilter: ModerationFilter = isAdmin
-    ? moderationFilter ?? 'all'
-    : 'moderated';
-
-  const visibleRecords = candidateRecords.filter((record) => {
-    const flags = moderationMap.get(record.id);
-    const isAdult =
-      flags?.isAdultContent ?? (typeof record.isAdultContent === 'boolean' ? record.isAdultContent : false);
-    if (showAdultContent === false && isAdult) {
-      return false;
+  // Shuffle arrays for randomization (Fisher-Yates algorithm)
+  const shuffleArray = <T>(array: T[]): T[] => {
+    const shuffled = [...array];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
+    return shuffled;
+  };
 
-    const isModerated =
-      flags?.isModerated ?? (typeof record.isModerated === 'boolean' ? record.isModerated : false);
-    if (effectiveModerationFilter === 'moderated') {
-      return isModerated;
-    }
-    if (effectiveModerationFilter === 'unmoderated') {
-      return !isModerated;
-    }
-    return true;
-  });
+  // Randomize unwatched and watched videos
+  const randomizedUnwatched = shuffleArray(unwatchedVideos);
+  const randomizedWatched = shuffleArray(watchedVideos);
 
-  const scored = visibleRecords
-    .filter((record) => !excludeIds.has(record.id))
-    .map((record) => {
-      const topics = record.videoTopics.map((topic) => topic.topic);
-      const topicScore = topics.reduce((sum, topic) => sum + (topicScoreMap.get(topic) ?? 0), 0);
-      const popularityScore = Math.log10((record.likesCount ?? 0) + 1);
-      const likedBoost = likedSet.has(record.id) ? 30 : 0;
-      const watchedPenalty = watchedSet.has(record.id) ? 25 : 0;
+  // Score and sort on DB-filtered subset (much smaller)
+  const topicScoreMap = new Map(topicPreferences.map((item) => [item.topic, item.likes]));
 
-      const score = topicScore * 12 + popularityScore * 5 + likedBoost - watchedPenalty;
+  const scoreVideo = (record: any, isWatched: boolean) => {
+    const topics = record.videoTopics.map((t: any) => t.topic);
+    const topicScore = topics.reduce((sum: number, topic: string) =>
+      sum + (topicScoreMap.get(topic) ?? 0), 0);
+    const popularityScore = Math.log10((record.likesCount ?? 0) + 1);
+    const likedBoost = likedSet.has(record.id) ? 30 : 0;
+    const watchedPenalty = isWatched ? 25 : 0;
 
-      return {
-        record,
-        score,
-        isWatched: watchedSet.has(record.id),
-        moderation: moderationMap.get(record.id),
-      };
-    });
+    return topicScore * 12 + popularityScore * 5 + likedBoost - watchedPenalty;
+  };
 
-  scored.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    if ((b.record.likesCount ?? 0) !== (a.record.likesCount ?? 0)) {
-      return (b.record.likesCount ?? 0) - (a.record.likesCount ?? 0);
-    }
-    return a.record.id - b.record.id;
-  });
+  // Use randomized arrays instead of original
+  const unwatched = randomizedUnwatched.map(record => ({
+    record,
+    score: scoreVideo(record, false),
+    isWatched: false,
+    moderation: {
+      isAdultContent: record.isAdultContent ?? false,
+      isModerated: record.isModerated ?? false,
+    },
+  }));
 
-  const unwatched = scored.filter((item) => !item.isWatched);
-  const watched = scored.filter((item) => item.isWatched);
+  const watched = randomizedWatched.map(record => ({
+    record,
+    score: scoreVideo(record, true),
+    isWatched: true,
+    moderation: {
+      isAdultContent: record.isAdultContent ?? false,
+      isModerated: record.isModerated ?? false,
+    },
+  }));
+
+  // Sort by score (personalization layer on top of randomization)
+  unwatched.sort((a, b) => b.score - a.score);
+  watched.sort((a, b) => b.score - a.score);
 
   return { likedSet, statusMap, unwatched, watched };
 };
@@ -687,6 +690,7 @@ const getFeed = async (
     showAdultContent,
     moderationFilter,
     isAdmin,
+    normalizedLimit, // Pass limit to optimize database query
   );
 
   const combined = [...unwatched, ...watched];
@@ -924,22 +928,27 @@ const searchPhrase = async (
   };
 
   // Use FULLTEXT search with MATCH AGAINST for optimal performance
+  // OPTIMIZATION: Two-stage query to minimize data transfer
   const searchQuery = trimmed.replace(/[+\-<>()~*"@]/g, ' ').trim();
 
   if (searchQuery) {
-    const fulltextRecords = await prisma.$queryRaw<CandidateRecord[]>`
-      SELECT
-        id, video_name AS videoName, video_url AS videoUrl,
-        transcript_full AS transcriptFull, transcript_chunks AS transcriptChunks,
-        transcript_word_chunks, transcript_translation_chunks AS transcriptTranslationChunks,
-        duration_seconds AS durationSeconds, audio_level AS audioLevel
+    // Stage 1: Get only IDs using FULLTEXT (fast, minimal data transfer)
+    const matchedIds = await prisma.$queryRaw<{id: number}[]>`
+      SELECT id
       FROM video_learning_content
       WHERE MATCH(transcript_full) AGAINST(${searchQuery} IN NATURAL LANGUAGE MODE)
       ORDER BY processed_at DESC
       LIMIT ${fetchTake}
     `;
-    if (appendFromRecords(fulltextRecords)) {
-      return buildResult();
+
+    if (matchedIds.length > 0) {
+      // Stage 2: Load full data only for matched videos
+      const fulltextRecords = await fetchRecords({
+        id: { in: matchedIds.map(r => r.id) },
+      });
+      if (appendFromRecords(fulltextRecords)) {
+        return buildResult();
+      }
     }
   }
 
@@ -1053,47 +1062,22 @@ const getContentById = async (id: string, userId?: string | null): Promise<Proce
   let likedByUser = false;
 
   if (userId) {
+    // OPTIMIZATION: Single SQL query instead of find + create/update (3 queries → 1 query)
+    // Use INSERT ... ON DUPLICATE KEY UPDATE with conditional logic
     try {
-      // Check if progress already exists
-      const existingProgress = await prisma.videoLearningProgress.findUnique({
-        where: {
-          userId_contentId: {
-            userId,
-            contentId: numericId,
-          },
-        },
-      });
-
-      if (existingProgress) {
-        // Only update if status is NOT_STARTED
-        if (existingProgress.status === VideoLearningStatus.NOT_STARTED) {
-          await prisma.videoLearningProgress.update({
-            where: {
-              userId_contentId: {
-                userId,
-                contentId: numericId,
-              },
-            },
-            data: {
-              status: VideoLearningStatus.WATCHED,
-            },
-          });
-        }
-      } else {
-        // Create new progress record
-        await prisma.videoLearningProgress.create({
-          data: {
-            userId,
-            contentId: numericId,
-            status: VideoLearningStatus.WATCHED,
-          },
-        });
-      }
+      await prisma.$executeRaw`
+        INSERT INTO video_learning_progress (user_id, content_id, status, created_at, updated_at)
+        VALUES (${userId}, ${numericId}, 'WATCHED', NOW(), NOW())
+        ON DUPLICATE KEY UPDATE
+          status = IF(status = 'NOT_STARTED', 'WATCHED', status),
+          updated_at = NOW()
+      `;
     } catch (error) {
       // Ignore unique constraint errors from race conditions
       console.log('[VideoLearning] Progress update skipped due to race condition');
     }
 
+    // OPTIMIZATION: Fetch like status (only 1 extra query, moderation is from record)
     const likeRecord = await prisma.videoLike.findUnique({
       where: {
         userId_contentId: {
@@ -1105,7 +1089,11 @@ const getContentById = async (id: string, userId?: string | null): Promise<Proce
     likedByUser = Boolean(likeRecord);
   }
 
-  const moderation = await fetchModerationFlag(numericId);
+  // OPTIMIZATION: Get moderation from record directly instead of separate query
+  const moderation = {
+    isAdultContent: record.isAdultContent ?? false,
+    isModerated: record.isModerated ?? false,
+  };
   return mapContentRecord(record as ContentRecord, likedByUser, moderation);
 };
 

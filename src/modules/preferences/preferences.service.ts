@@ -5,7 +5,11 @@ export type ThemePreference = { theme: 'light' | 'dark' };
 
 const DEFAULT_THEME: ThemePreference = { theme: 'light' };
 
+// OPTIMIZATION: Cache to avoid CREATE TABLE IF NOT EXISTS on every request
+let tableChecked = false;
+
 const ensureTable = async () => {
+  if (tableChecked) return;
   await prisma.$executeRawUnsafe(
     `CREATE TABLE IF NOT EXISTS user_preferences (
       id VARCHAR(191) PRIMARY KEY,
@@ -15,29 +19,42 @@ const ensureTable = async () => {
       updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
     )`,
   );
+  tableChecked = true;
 };
 
 const getTheme = async (userId: string): Promise<ThemePreference> => {
-  await ensureTable();
-  const rows = (await prisma.$queryRawUnsafe<any[]>(
-    `SELECT theme FROM user_preferences WHERE userId = ? LIMIT 1`,
-    userId,
-  )) as Array<{ theme: string }>;
-  const theme = rows?.[0]?.theme === 'dark' ? 'dark' : 'light';
+  // OPTIMIZATION: Check table once, not on every request
+  if (!tableChecked) {
+    await ensureTable();
+  }
+
+  // OPTIMIZATION: Use Prisma ORM instead of raw SQL (table already in schema.prisma)
+  const preference = await prisma.userPreference.findUnique({
+    where: { userId },
+    select: { theme: true },
+  });
+
+  const theme = preference?.theme === 'dark' ? 'dark' : 'light';
   return { theme };
 };
 
 const setTheme = async (userId: string, theme: 'light' | 'dark'): Promise<ThemePreference> => {
-  await ensureTable();
-  const id = randomUUID();
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO user_preferences (id, userId, theme, createdAt, updatedAt)
-     VALUES (?, ?, ?, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
-     ON DUPLICATE KEY UPDATE theme = VALUES(theme), updatedAt = CURRENT_TIMESTAMP(3)`,
-    id,
-    userId,
-    theme,
-  );
+  // OPTIMIZATION: Check table once, not on every request
+  if (!tableChecked) {
+    await ensureTable();
+  }
+
+  // OPTIMIZATION: Use Prisma upsert instead of raw SQL
+  await prisma.userPreference.upsert({
+    where: { userId },
+    update: { theme },
+    create: {
+      id: randomUUID(),
+      userId,
+      theme,
+    },
+  });
+
   return { theme };
 };
 

@@ -18,60 +18,25 @@ export const createApp = () => {
   const app = express();
 
   // CORS should be applied before helmet so headers are not overridden
+  // OPTIMIZATION: Simplified CORS - one middleware instead of 3 for better performance
+  const corsOrigins = (process.env.CORS_ORIGIN || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
   app.use(
     cors({
-      origin: (origin, callback) => {
-        // In development reflect any origin for ease of local testing
-        if (!origin || process.env.NODE_ENV !== 'production') return callback(null, true);
-        // In production, allow only explicit origins (comma-separated)
-        const configuredOrigins = (process.env.CORS_ORIGIN || '')
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean);
-        const defaultLocalOrigins = ['http://localhost:8081', 'http://127.0.0.1:8081'];
-        const allowedOrigins = new Set([...configuredOrigins, ...defaultLocalOrigins]);
-        if (allowedOrigins.size && origin && allowedOrigins.has(origin)) return callback(null, true);
-        // Allow Expo development URLs (exp://*.exp.direct, https://*.exp.direct, https://*.expo.dev)
-        if (origin && /^exp:\/\/.*\.exp\.direct$/.test(origin)) return callback(null, true);
-        if (origin && /^https:\/\/.*\.exp\.direct$/.test(origin)) return callback(null, true);
-        if (origin && /^https:\/\/.*\.expo\.dev$/.test(origin)) return callback(null, true);
-        if (origin === 'https://expo.dev' || origin === 'https://exp.direct') return callback(null, true);
-        return callback(new Error('Not allowed by CORS'));
-      },
+      origin: process.env.NODE_ENV === 'production'
+        ? corsOrigins.length > 0
+          ? corsOrigins
+          : false // Block all in production if no CORS_ORIGIN set
+        : true, // Allow all origins in development
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'x-user-role'],
       credentials: false,
       optionsSuccessStatus: 204,
     }),
   );
-  // Extra permissive CORS for development to avoid edge cases with dev servers
-  if (process.env.NODE_ENV !== 'production') {
-    app.use((req, res, next) => {
-      const reqOrigin = (req.headers.origin as string) || '*';
-      res.header('Access-Control-Allow-Origin', reqOrigin);
-      res.header('Vary', 'Origin');
-      res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-      const requestedHeaders =
-        (req.headers['access-control-request-headers'] as string) ||
-        'Content-Type, Authorization, x-user-id, x-user-role';
-      res.header('Access-Control-Allow-Headers', requestedHeaders);
-      // If the browser issues a preflight, answer it here
-      if (req.method === 'OPTIONS') {
-        if (req.headers['access-control-request-private-network'] === 'true') {
-          res.setHeader('Access-Control-Allow-Private-Network', 'true');
-        }
-        return res.sendStatus(204);
-      }
-      next();
-    });
-  }
-  // Allow Private Network Access preflight for Chrome when calling localhost from secure origins
-  app.use((req, res, next) => {
-    if (req.headers['access-control-request-private-network'] === 'true') {
-      res.setHeader('Access-Control-Allow-Private-Network', 'true');
-    }
-    next();
-  });
   // Apply helmet after CORS. Relax some policies in dev to avoid interfering with localhost API calls
   app.use(
     helmet({

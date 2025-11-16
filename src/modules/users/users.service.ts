@@ -3,17 +3,19 @@ import { UserRole } from '../../shared/types';
 
 import { prisma } from '../../shared/prisma/prismaClient';
 
+// OPTIMIZATION: Cache flags to avoid checking schema on every request
+let xpColumnChecked = false;
+let streakTableChecked = false;
+
 const listUsers = async (): Promise<UserProfileDto[]> => {
+  // OPTIMIZATION: Check xpColumn only once at startup
+  if (!xpColumnChecked) {
+    await ensureXpColumn();
+  }
+
   const users = await prisma.user.findMany({ orderBy: { createdAt: 'desc' } });
-  await ensureXpColumn();
-  const ids = users.map((u) => u.id);
-  const xpRows = (ids.length
-    ? ((await prisma.$queryRawUnsafe<any[]>(
-        `SELECT id, xpPoints FROM users WHERE id IN (${ids.map(() => '?').join(',')})`,
-        ...ids,
-      )) as Array<{ id: string; xpPoints: number }>)
-    : []) as Array<{ id: string; xpPoints: number }>; 
-  const xpMap = new Map(xpRows.map((r) => [r.id, Number(r.xpPoints) || 0]));
+
+  // OPTIMIZATION: xpPoints is in User model (schema.prisma line 23), use it directly
   return users.map((user) => ({
     id: user.id,
     email: user.email,
@@ -23,11 +25,12 @@ const listUsers = async (): Promise<UserProfileDto[]> => {
     streakDays: user.streakDays,
     completedLessons: user.completedLessons,
     level: user.level,
-    xpPoints: xpMap.get(user.id) ?? 0,
+    xpPoints: user.xpPoints ?? 0,
   }));
 };
 
 const ensureStreakTable = async () => {
+  if (streakTableChecked) return;
   await prisma.$executeRawUnsafe(
     `CREATE TABLE IF NOT EXISTS user_streaks (
       userId VARCHAR(191) PRIMARY KEY,
@@ -35,9 +38,11 @@ const ensureStreakTable = async () => {
       updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
     )`,
   );
+  streakTableChecked = true;
 };
 
 const ensureXpColumn = async () => {
+  if (xpColumnChecked) return;
   const [existsRow] = (await prisma.$queryRawUnsafe<any[]>(
     `SELECT COUNT(*) as cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'xpPoints'`,
   )) as Array<{ cnt: number }>;
@@ -45,6 +50,7 @@ const ensureXpColumn = async () => {
   if (!exists) {
     await prisma.$executeRawUnsafe(`ALTER TABLE users ADD COLUMN xpPoints INT NOT NULL DEFAULT 0`);
   }
+  xpColumnChecked = true;
 };
 
 const refreshStreak = async (userId: string): Promise<{ streakDays: number }> => {
@@ -93,16 +99,33 @@ export const usersService = {
   listUsers,
   refreshStreak,
   addXp: async (userId: string, amount: number): Promise<{ xpPoints: number }> => {
-    await ensureXpColumn();
-    await prisma.$executeRawUnsafe(
-      `UPDATE users SET xpPoints = GREATEST(0, xpPoints + ?) WHERE id = ?`,
-      amount,
-      userId,
-    );
-    const [row] = (await prisma.$queryRawUnsafe<any[]>(`SELECT xpPoints FROM users WHERE id = ?`, userId)) as Array<{
-      xpPoints: number;
-    }>;
-    return { xpPoints: Number(row?.xpPoints ?? 0) };
+    // OPTIMIZATION: Check only once, not on every addXp call
+    if (!xpColumnChecked) {
+      await ensureXpColumn();
+    }
+
+    // OPTIMIZATION: Use Prisma update instead of raw SQL + separate SELECT
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        xpPoints: {
+          increment: amount,
+        },
+      },
+      select: { xpPoints: true },
+    });
+
+    // Ensure xpPoints doesn't go below 0
+    if (updated.xpPoints < 0) {
+      const fixed = await prisma.user.update({
+        where: { id: userId },
+        data: { xpPoints: 0 },
+        select: { xpPoints: true },
+      });
+      return { xpPoints: fixed.xpPoints };
+    }
+
+    return { xpPoints: updated.xpPoints };
   },
 };
 
