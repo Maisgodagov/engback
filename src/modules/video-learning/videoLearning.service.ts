@@ -1,4 +1,4 @@
-import { Prisma, VideoLearningStatus } from '@prisma/client';
+import { Prisma, VideoLearningStatus, VideoTranscriptToken } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 
 import { prisma } from '../../shared/prisma/prismaClient';
@@ -257,6 +257,12 @@ const MAX_SNIPPET_CAP = 200;
 const CONTEXT_WINDOW = 4;
 const DEFAULT_PADDING_SECONDS = 1;
 const MAX_PADDING_SECONDS = 10;
+const TOKEN_CONTEXT_WINDOW = 6;
+const TOKEN_INSERT_BATCH_SIZE = 1000;
+const TOKEN_TEXT_LIMIT = 120;
+const TOKEN_CANDIDATE_BATCH_SIZE = 200;
+const MAX_TOKEN_CANDIDATE_BATCHES = 20;
+const TRANSCRIPT_BACKFILL_BATCH_SIZE = 200;
 const RECORD_FETCH_MULTIPLIER = 1.5;
 
 const findPhraseMatches = (
@@ -316,6 +322,32 @@ const sanitizeSnippetCap = (cap?: number, fallback = DEFAULT_SNIPPET_CAP): numbe
   const coerced = Math.trunc(cap as number);
   if (Number.isNaN(coerced) || coerced <= 0) return fallback;
   return Math.min(coerced, MAX_SNIPPET_CAP);
+};
+
+const paginateSnippets = (
+  phrase: string,
+  snippets: PhraseSnippet[],
+  pageSize: number,
+  cursorOffset: number,
+  snippetCap: number,
+): PhraseSearchResult => {
+  const total = Math.min(snippets.length, snippetCap);
+  const start = Math.min(cursorOffset, total);
+  const pageItems = snippets.slice(start, start + pageSize);
+  const returned = pageItems.length;
+  const nextOffset = start + returned;
+  const hasMore = nextOffset < total;
+  const nextCursor = hasMore ? String(nextOffset) : null;
+
+  return {
+    phrase,
+    items: pageItems,
+    returned,
+    total,
+    hasMore,
+    nextCursor,
+    pageSize,
+  };
 };
 
 const sanitizeCursorOffset = (offset?: number): number => {
@@ -735,7 +767,7 @@ const getFeed = async (
   };
 };
 
-const searchPhrase = async (
+const searchPhraseLegacy = async (
   phrase: string,
   limit?: number,
   paddingSeconds?: number,
@@ -892,24 +924,8 @@ const searchPhrase = async (
     return false;
   };
 
-  const buildResult = () => {
-    const total = Math.min(snippets.length, snippetCap);
-    const start = Math.min(cursorOffset, total);
-    const pageItems = snippets.slice(start, start + pageSize);
-    const returned = pageItems.length;
-    const nextOffset = start + returned;
-    const hasMore = nextOffset < total;
-    const nextCursor = hasMore ? String(nextOffset) : null;
-    return {
-      phrase: trimmed,
-      items: pageItems,
-      returned,
-      total,
-      hasMore,
-      nextCursor,
-      pageSize,
-    };
-  };
+  const buildResult = () =>
+    paginateSnippets(trimmed, snippets, pageSize, cursorOffset, snippetCap);
 
   const fetchRecords = async (
     where: Prisma.VideoLearningContentWhereInput | undefined,
@@ -979,6 +995,438 @@ const searchPhrase = async (
   }
 
   return buildResult();
+};
+
+type TokenCandidateRow = {
+  contentId: number;
+  position: number;
+};
+
+type CandidateMatch = {
+  contentId: number;
+  matchStartPosition: number;
+  matchEndPosition: number;
+  windowChunks: TranscriptWordChunk[];
+  matchStartIndex: number;
+  matchEndIndex: number;
+  rawStartSeconds: number;
+  rawEndSeconds: number;
+};
+
+type SnippetContentRecord = {
+  id: number;
+  videoName: string;
+  videoUrl: string | null;
+  durationSeconds: number | null;
+  audioLevel: number | null;
+  transcriptTranslationChunks: unknown;
+};
+
+let transcriptTokenBackfillPromise: Promise<void> | null = null;
+
+const chunkArray = <T>(items: T[], size: number): T[][] => {
+  if (size <= 0 || items.length <= size) {
+    return [items];
+  }
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size));
+  }
+  return result;
+};
+
+const tokenRowsToChunks = (tokens: VideoTranscriptToken[]): TranscriptWordChunk[] =>
+  tokens.map((token) => {
+    const start = Number.isFinite(token.startSeconds ?? Number.NaN)
+      ? Number(token.startSeconds)
+      : 0;
+    const endCandidate = Number.isFinite(token.endSeconds ?? Number.NaN)
+      ? Number(token.endSeconds)
+      : start;
+    const safeEnd = endCandidate >= start ? endCandidate : start;
+    return {
+      text: token.token ?? '',
+      timestamp: [start, safeEnd] as [number, number],
+    };
+  });
+
+const persistTranscriptTokens = async (
+  contentId: number,
+  wordChunks: TranscriptWordChunk[],
+): Promise<void> => {
+  if (!wordChunks.length) {
+    await prisma.videoTranscriptToken.deleteMany({ where: { contentId } });
+    return;
+  }
+
+  const payload = wordChunks.map((chunk, index) => {
+    const tokenText = String(chunk.text ?? '').slice(0, TOKEN_TEXT_LIMIT);
+    const normalized = normalizeToken(chunk.text ?? '').slice(0, TOKEN_TEXT_LIMIT);
+    const [start, end] = chunk.timestamp;
+    const safeStart = Number.isFinite(start) && start >= 0 ? start : 0;
+    const safeEnd = Number.isFinite(end) && end >= safeStart ? end : safeStart;
+    return {
+      contentId,
+      position: index,
+      token: tokenText,
+      tokenNormalized: normalized,
+      startSeconds: safeStart,
+      endSeconds: safeEnd,
+    };
+  });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.videoTranscriptToken.deleteMany({ where: { contentId } });
+    const batches = chunkArray(payload, TOKEN_INSERT_BATCH_SIZE);
+    for (const batch of batches) {
+      if (!batch.length) continue;
+      await tx.videoTranscriptToken.createMany({
+        data: batch,
+      });
+    }
+  });
+};
+
+const ensureTranscriptTokensForContent = async (contentId: number): Promise<void> => {
+  const existing = await prisma.videoTranscriptToken.findFirst({
+    where: { contentId },
+    select: { contentId: true },
+  });
+  if (existing) return;
+
+  const record = await prisma.videoLearningContent.findUnique({
+    where: { id: contentId },
+    select: { transcript_word_chunks: true },
+  });
+  if (!record) return;
+  const wordChunks = parseChunkArray(record.transcript_word_chunks);
+  if (!wordChunks.length) return;
+  await persistTranscriptTokens(contentId, wordChunks);
+};
+
+const fetchTokenSlice = async (
+  contentId: number,
+  start: number,
+  end: number,
+): Promise<VideoTranscriptToken[]> => {
+  if (end < start) {
+    return [];
+  }
+  return prisma.videoTranscriptToken.findMany({
+    where: {
+      contentId,
+      position: {
+        gte: start,
+        lte: end,
+      },
+    },
+    orderBy: { position: 'asc' },
+  });
+};
+
+const fetchTokenCandidates = async (
+  normalizedToken: string,
+  batchSize: number,
+  lastCandidate?: TokenCandidateRow | null,
+): Promise<TokenCandidateRow[]> => {
+  if (!normalizedToken) {
+    return [];
+  }
+  const cursorClause = lastCandidate
+    ? Prisma.sql`AND (content_id < ${lastCandidate.contentId} OR (content_id = ${lastCandidate.contentId} AND position > ${lastCandidate.position}))`
+    : Prisma.sql``;
+  return prisma.$queryRaw<TokenCandidateRow[]>`
+    SELECT content_id AS contentId, position
+    FROM video_transcript_tokens
+    WHERE token_normalized = ${normalizedToken}
+    ${cursorClause}
+    ORDER BY content_id DESC, position ASC
+    LIMIT ${batchSize}
+  `;
+};
+
+const resolveCandidateMatch = async (
+  candidate: TokenCandidateRow,
+  normalizedTokens: string[],
+  ensuredContents: Set<number>,
+): Promise<CandidateMatch | null> => {
+  const phraseLength = normalizedTokens.length;
+  if (!phraseLength) return null;
+
+  const windowStart = Math.max(0, candidate.position - TOKEN_CONTEXT_WINDOW);
+  const windowEnd = candidate.position + phraseLength - 1 + TOKEN_CONTEXT_WINDOW;
+  let tokens = await fetchTokenSlice(candidate.contentId, windowStart, windowEnd);
+  if (!tokens.length && !ensuredContents.has(candidate.contentId)) {
+    await ensureTranscriptTokensForContent(candidate.contentId);
+    ensuredContents.add(candidate.contentId);
+    tokens = await fetchTokenSlice(candidate.contentId, windowStart, windowEnd);
+  }
+  if (!tokens.length) return null;
+
+  const startIndex = tokens.findIndex((token) => token.position === candidate.position);
+  if (startIndex === -1) return null;
+
+  const searchable = tokens
+    .map((token, index) => ({
+      index,
+      normalized: (token.tokenNormalized ?? '').trim(),
+    }))
+    .filter((entry) => entry.normalized.length > 0);
+
+  const searchableStart = searchable.findIndex((entry) => entry.index === startIndex);
+  if (searchableStart === -1) return null;
+
+  for (let i = 0; i < phraseLength; i += 1) {
+    const entry = searchable[searchableStart + i];
+    if (!entry || entry.normalized !== normalizedTokens[i]) {
+      return null;
+    }
+  }
+
+  const matchStartIndex = searchable[searchableStart].index;
+  const matchEndIndex = searchable[searchableStart + phraseLength - 1].index;
+  const windowChunks = tokenRowsToChunks(tokens);
+  const matchedChunks = windowChunks.slice(matchStartIndex, matchEndIndex + 1);
+  if (!matchedChunks.length) return null;
+
+  const rawStartSeconds = matchedChunks[0]?.timestamp[0] ?? 0;
+  const rawEndSeconds = matchedChunks[matchedChunks.length - 1]?.timestamp[1] ?? rawStartSeconds;
+
+  return {
+    contentId: candidate.contentId,
+    matchStartPosition: tokens[matchStartIndex]?.position ?? candidate.position,
+    matchEndPosition: tokens[matchEndIndex]?.position ?? candidate.position,
+    windowChunks,
+    matchStartIndex,
+    matchEndIndex,
+    rawStartSeconds,
+    rawEndSeconds,
+  };
+};
+
+const loadSnippetContent = async (
+  contentId: number,
+  cache: Map<number, SnippetContentRecord>,
+): Promise<SnippetContentRecord | null> => {
+  if (cache.has(contentId)) {
+    return cache.get(contentId) ?? null;
+  }
+  const record = await prisma.videoLearningContent.findUnique({
+    where: { id: contentId },
+    select: {
+      id: true,
+      videoName: true,
+      videoUrl: true,
+      durationSeconds: true,
+      audioLevel: true,
+      transcriptTranslationChunks: true,
+    },
+  });
+  if (!record) {
+    return null;
+  }
+  cache.set(contentId, record);
+  return record;
+};
+
+const buildSnippetFromMatch = async (
+  match: CandidateMatch,
+  options: { phrase: string; snippetPadding: number },
+  cache: Map<number, SnippetContentRecord>,
+): Promise<PhraseSnippet | null> => {
+  const metadata = await loadSnippetContent(match.contentId, cache);
+  if (!metadata || !metadata.videoUrl) {
+    return null;
+  }
+
+  const matchedChunks = match.windowChunks.slice(match.matchStartIndex, match.matchEndIndex + 1);
+  const matchedText = formatChunksText(matchedChunks);
+  if (!matchedText) return null;
+  const contextText = buildContextText(
+    match.windowChunks,
+    match.matchStartIndex,
+    match.matchEndIndex,
+    CONTEXT_WINDOW,
+  );
+
+  const paddedStart = Math.max(0, match.rawStartSeconds - options.snippetPadding);
+  const rawEndWithPadding = match.rawEndSeconds + options.snippetPadding;
+  const duration =
+    typeof metadata.durationSeconds === 'number' && Number.isFinite(metadata.durationSeconds)
+      ? metadata.durationSeconds
+      : null;
+  const clampedEnd = duration !== null ? Math.min(rawEndWithPadding, duration) : rawEndWithPadding;
+  const minimumDelta = options.snippetPadding > 0 ? options.snippetPadding : 0.5;
+  const safeEnd = clampedEnd > paddedStart ? clampedEnd : paddedStart + minimumDelta;
+
+  const translationChunks = parseChunkArray(metadata.transcriptTranslationChunks);
+  const translationIndexes = translationChunks.length
+    ? findChunkIndexesInRange(translationChunks, match.rawStartSeconds, match.rawEndSeconds)
+    : [];
+  const translationMatchedText = translationIndexes.length
+    ? buildTextFromChunkIndexes(translationChunks, translationIndexes)
+    : '';
+  const translationContextIndexes = translationChunks.length
+    ? findChunkIndexesInRange(translationChunks, paddedStart, safeEnd)
+    : [];
+  const translationContextText = translationContextIndexes.length
+    ? buildTextFromChunkIndexes(translationChunks, translationContextIndexes)
+    : translationMatchedText;
+
+  return {
+    id: `${match.contentId}-${match.matchStartPosition}-${match.matchEndPosition}`,
+    contentId: match.contentId.toString(),
+    videoName: metadata.videoName,
+    videoUrl: metadata.videoUrl ?? '',
+    startSeconds: paddedStart,
+    endSeconds: safeEnd,
+    matchedText,
+    contextText,
+    phrase: options.phrase,
+    durationSeconds: duration,
+    audioLevel:
+      typeof metadata.audioLevel === 'number' && Number.isFinite(metadata.audioLevel)
+        ? metadata.audioLevel
+        : undefined,
+    translationMatchedText: translationMatchedText || undefined,
+    translationContextText: translationContextText || undefined,
+  };
+};
+
+const triggerTranscriptTokenBackfill = (): void => {
+  if (transcriptTokenBackfillPromise) {
+    return;
+  }
+  transcriptTokenBackfillPromise = (async () => {
+    let lastId = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const records = await prisma.videoLearningContent.findMany({
+        where: lastId > 0 ? { id: { gt: lastId } } : undefined,
+        orderBy: { id: 'asc' },
+        select: { id: true, transcript_word_chunks: true },
+        take: TRANSCRIPT_BACKFILL_BATCH_SIZE,
+      });
+      if (!records.length) {
+        break;
+      }
+      for (const record of records) {
+        lastId = record.id;
+        const chunks = parseChunkArray(record.transcript_word_chunks);
+        if (!chunks.length) continue;
+        await persistTranscriptTokens(record.id, chunks);
+      }
+      hasMore = records.length === TRANSCRIPT_BACKFILL_BATCH_SIZE;
+    }
+  })()
+    .catch((error) => {
+      console.error('[VideoLearning] Failed to backfill transcript tokens', error);
+    })
+    .finally(() => {
+      transcriptTokenBackfillPromise = null;
+    });
+};
+
+const searchPhrase = async (
+  phrase: string,
+  limit?: number,
+  paddingSeconds?: number,
+  cursor?: number,
+  maxSnippets?: number,
+): Promise<PhraseSearchResult> => {
+  const trimmed = (phrase ?? '').trim();
+  const pageSize = sanitizeSnippetLimit(limit);
+  if (!trimmed) {
+    return {
+      phrase: '',
+      items: [],
+      returned: 0,
+      total: 0,
+      hasMore: false,
+      nextCursor: null,
+      pageSize,
+    };
+  }
+
+  const normalizedTokens = trimmed
+    .split(/\s+/)
+    .map(normalizeToken)
+    .filter((token) => token.length > 0);
+
+  if (!normalizedTokens.length) {
+    return {
+      phrase: trimmed,
+      items: [],
+      returned: 0,
+      total: 0,
+      hasMore: false,
+      nextCursor: null,
+      pageSize,
+    };
+  }
+
+  const snippetCap = Math.max(pageSize, sanitizeSnippetCap(maxSnippets));
+  const cursorOffset = Math.min(sanitizeCursorOffset(cursor), snippetCap);
+  const snippetPadding = sanitizePaddingSeconds(paddingSeconds);
+
+  const snippets: PhraseSnippet[] = [];
+  const processedContentIds = new Set<number>();
+  const ensuredContents = new Set<number>();
+  const metadataCache = new Map<number, SnippetContentRecord>();
+
+  let candidateCursor: TokenCandidateRow | null = null;
+  let batchCount = 0;
+
+  while (snippets.length < snippetCap && batchCount < MAX_TOKEN_CANDIDATE_BATCHES) {
+    const candidates = await fetchTokenCandidates(
+      normalizedTokens[0],
+      TOKEN_CANDIDATE_BATCH_SIZE,
+      candidateCursor,
+    );
+    batchCount += 1;
+
+    if (!candidates.length) {
+      break;
+    }
+
+    for (const candidate of candidates) {
+      candidateCursor = candidate;
+      if (processedContentIds.has(candidate.contentId)) {
+        continue;
+      }
+
+      const match = await resolveCandidateMatch(candidate, normalizedTokens, ensuredContents);
+      if (!match) {
+        continue;
+      }
+
+      const snippet = await buildSnippetFromMatch(
+        match,
+        { phrase: trimmed, snippetPadding },
+        metadataCache,
+      );
+      if (!snippet) {
+        continue;
+      }
+
+      snippets.push(snippet);
+      processedContentIds.add(candidate.contentId);
+      if (snippets.length >= snippetCap) {
+        break;
+      }
+    }
+
+    if (candidates.length < TOKEN_CANDIDATE_BATCH_SIZE) {
+      break;
+    }
+  }
+
+  if (!snippets.length) {
+    triggerTranscriptTokenBackfill();
+    return searchPhraseLegacy(phrase, limit, paddingSeconds, cursor, maxSnippets);
+  }
+
+  return paginateSnippets(trimmed, snippets, pageSize, cursorOffset, snippetCap);
 };
 
 const updateLikeStatus = async (userId: string, contentId: string, like: boolean): Promise<LikeStatus> => {
