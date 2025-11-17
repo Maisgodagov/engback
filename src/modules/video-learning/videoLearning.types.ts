@@ -71,6 +71,7 @@ export interface ProcessedVideo {
   isLiked: boolean;
   isAdultContent?: boolean;
   isModerated?: boolean;
+  author?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -114,6 +115,7 @@ export interface VideoFeedItem {
   createdAt: string;
   isAdultContent?: boolean;
   isModerated?: boolean;
+  author?: string | null;
 }
 
 export interface SubmitExerciseAnswer {

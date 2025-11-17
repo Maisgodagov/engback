@@ -7,6 +7,7 @@ export const videoLearningRouter = Router();
 
 videoLearningRouter.get('/feed', controller.getFeed);
 videoLearningRouter.get('/search', controller.searchPhrase);
+videoLearningRouter.get('/authors', requireAdmin, controller.getAuthors);
 videoLearningRouter.get('/:id', controller.getContent);
 
 videoLearningRouter.patch('/:id/moderation/cefr-level', requireAdmin, controller.updateCefrLevel);
@@ -20,6 +21,7 @@ videoLearningRouter.patch('/:id/moderation/subtitles/chunk', requireAdmin, contr
 videoLearningRouter.patch('/:id/moderation/exercises', requireAdmin, controller.updateExercises);
 videoLearningRouter.patch('/:id/moderation/adult', requireAdmin, controller.updateIsAdultContent);
 videoLearningRouter.patch('/:id/moderation/status', requireAdmin, controller.updateModerationStatus);
+videoLearningRouter.patch('/:id/moderation/author', requireAdmin, controller.updateAuthor);
 videoLearningRouter.delete('/:id', requireAdmin, controller.deleteVideo);
 
 videoLearningRouter.post('/:id/like', controller.updateLike);

@@ -17,6 +17,7 @@ import {
   updateExercisesSchema,
   updateIsAdultContentSchema,
   updateModerationStatusSchema,
+  updateAuthorSchema,
 } from './videoLearning.schemas';
 
 const getUserId = (req: Request): string | null => {
@@ -212,4 +213,23 @@ export const deleteVideo = async (req: Request, res: Response) => {
   const params = contentIdParamSchema.parse({ id: req.params.id });
   await videoLearningService.deleteVideo(params.id);
   res.status(204).send();
+};
+
+export const getAuthors = async (req: Request, res: Response) => {
+  // Check admin role
+  const userRole = (req.header('x-user-role') ?? '').toLowerCase();
+  if (userRole !== 'admin') {
+    res.status(403).json({ message: 'Admin access required' });
+    return;
+  }
+  
+  const authors = await videoLearningService.getAuthors();
+  res.json(authors);
+};
+
+export const updateAuthor = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const body = updateAuthorSchema.parse(req.body);
+  const result = await videoLearningService.updateAuthor(params.id, body.author);
+  res.json(result);
 };

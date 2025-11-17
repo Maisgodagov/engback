@@ -216,6 +216,7 @@ model VideoLearningContent {
   likesCount                  Int                                       @default(0) @map("likes_count")
   isAdultContent              Boolean?                                  @map("is_adult_content")
   isModerated                 Boolean                                   @default(false) @map("is_moderated")
+  author                      String?                                   @db.VarChar(255)
   processedAt                 DateTime?                                 @default(now()) @map("processed_at") @db.Timestamp(0)
   status                      VideoLearningContentStatus?               @default(completed) @map("status")
   progressEntries             VideoLearningProgress[]
@@ -242,6 +243,15 @@ model VideoTranscriptToken {
   @@id([contentId, position])
   @@index([tokenNormalized, contentId, position], map: "idx_video_transcript_token_search")
   @@map("video_transcript_tokens")
+}
+
+model Author {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("authors")
 }
 
 model VideoTopic {

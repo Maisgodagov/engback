@@ -57,6 +57,7 @@ type ContentRecord = {
   likesCount: number | null;
   isAdultContent: boolean | null;
   isModerated: boolean;
+  author: string | null;
 };
 
 type PoolRecord = Prisma.VideoLearningContentGetPayload<{
@@ -554,6 +555,7 @@ const mapContentRecord = (
       (typeof record.isModerated === 'boolean'
         ? record.isModerated
         : Boolean(record.isModerated)),
+    author: record.author ?? null,
     createdAt: (record.processedAt ?? new Date()).toISOString(),
     updatedAt: (record.processedAt ?? new Date()).toISOString(),
   };
@@ -2026,6 +2028,42 @@ const submitProgress = async (
   };
 };
 
+const getAuthors = async (): Promise<Array<{ username: string; createdAt: Date }>> => {
+  const authors = await prisma.author.findMany({
+    select: {
+      username: true,
+      createdAt: true,
+    },
+    orderBy: {
+      username: 'asc',
+    },
+  });
+  return authors;
+};
+
+const updateAuthor = async (contentId: string, author: string | null): Promise<ProcessedVideo> => {
+  const numericId = ensureContentNumericId(contentId);
+  const sanitized = author ? author.trim() : null;
+  const authorValue = sanitized ? sanitized : null;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.videoLearningContent.update({
+      where: { id: numericId },
+      data: { author: authorValue },
+    });
+
+    if (authorValue) {
+      await tx.author.upsert({
+        where: { username: authorValue },
+        update: { updatedAt: new Date() },
+        create: { username: authorValue },
+      });
+    }
+  });
+
+  return getContentOrThrow(String(numericId));
+};
+
 export const videoLearningService = {
   getFeed,
   searchPhrase,
@@ -2044,4 +2082,6 @@ export const videoLearningService = {
   updateModerationStatus,
   deleteVideo,
   submitProgress,
+  getAuthors,
+  updateAuthor,
 };

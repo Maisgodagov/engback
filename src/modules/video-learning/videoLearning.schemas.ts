@@ -176,3 +176,21 @@ export type UpdateSubtitleChunkInput = z.infer<typeof updateSubtitleChunkSchema>
 export type UpdateExercisesInput = z.infer<typeof updateExercisesSchema>;
 export type UpdateIsAdultContentInput = z.infer<typeof updateIsAdultContentSchema>;
 export type UpdateModerationStatusInput = z.infer<typeof updateModerationStatusSchema>;
+
+export const updateAuthorSchema = z.object({
+  author: z
+    .string()
+    .trim()
+    .refine(
+      (value) => {
+        if (value === '') return true;
+        return /^@[a-zA-Z0-9_]+$/.test(value);
+      },
+      {
+        message: 'Author must start with @ followed by English letters, numbers, or underscores',
+      },
+    )
+    .transform((value) => (value === '' ? null : value)),
+});
+
+export type UpdateAuthorInput = z.infer<typeof updateAuthorSchema>;
