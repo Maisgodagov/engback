@@ -816,6 +816,7 @@ const getFeed = async (
       createdAt: processed.createdAt,
       isAdultContent: processed.isAdultContent,
       isModerated: processed.isModerated,
+      author: processed.author ?? null,
     };
   });
 
