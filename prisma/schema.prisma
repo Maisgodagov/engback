@@ -246,10 +246,12 @@ model VideoTranscriptToken {
 }
 
 model Author {
-  id        Int      @id @default(autoincrement())
-  username  String   @unique @db.VarChar(255)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  id          Int      @id @default(autoincrement())
+  username    String   @unique @db.VarChar(255)
+  displayName String?  @map("display_name") @db.VarChar(255)
+  videoCount  Int      @default(0) @map("video_count")
+  firstSeenAt DateTime @default(now()) @map("first_seen_at")
+  lastVideoAt DateTime @default(now()) @updatedAt @map("last_video_at")
 
   @@map("authors")
 }

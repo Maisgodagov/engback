@@ -2028,15 +2028,10 @@ const submitProgress = async (
   };
 };
 
-const getAuthors = async (): Promise<Array<{ username: string; createdAt: Date }>> => {
+const getAuthors = async (): Promise<Array<{ username: string }>> => {
   const authors = await prisma.author.findMany({
-    select: {
-      username: true,
-      createdAt: true,
-    },
-    orderBy: {
-      username: 'asc',
-    },
+    select: { username: true },
+    orderBy: { username: 'asc' },
   });
   return authors;
 };
@@ -2055,7 +2050,7 @@ const updateAuthor = async (contentId: string, author: string | null): Promise<P
     if (authorValue) {
       await tx.author.upsert({
         where: { username: authorValue },
-        update: { updatedAt: new Date() },
+        update: { lastVideoAt: new Date() },
         create: { username: authorValue },
       });
     }
