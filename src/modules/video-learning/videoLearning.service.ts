@@ -713,7 +713,7 @@ const computeRecommendationScores = async (
 
     // CACHE min/max query - rarely changes (only when new videos added)
     const cacheKey = `minmax:${where.isModerated}:${where.isAdultContent}:${cefrLevels?.join(',')}:${speechSpeeds?.join(',')}`;
-    let minMaxResult = lruCache.get(cacheKey);
+    let minMaxResult = lruCache.get(cacheKey) as { minId: number; maxId: number; total: number } | undefined;
 
     if (!minMaxResult) {
       const [result] = await prisma.$queryRaw<Array<{ minId: number; maxId: number; total: bigint }>>`
@@ -724,13 +724,18 @@ const computeRecommendationScores = async (
           ${cefrLevels ? Prisma.sql`AND cefr_level IN (${Prisma.join(cefrLevels)})` : Prisma.sql``}
           ${speechSpeeds ? Prisma.sql`AND speech_speed IN (${Prisma.join(speechSpeeds)})` : Prisma.sql``}
       `;
-      minMaxResult = result;
+      // Convert BigInt to Number before caching (BigInt can't be serialized to JSON)
+      minMaxResult = {
+        minId: result.minId,
+        maxId: result.maxId,
+        total: Number(result.total),
+      };
       lruCache.set(cacheKey, minMaxResult, { ttl: 1000 * 60 * 30 }); // 30 min TTL (rarely changes)
     }
 
-    if (!minMaxResult || minMaxResult.total === 0n) return [];
+    if (!minMaxResult || minMaxResult.total === 0) return [];
 
-    const total = Number(minMaxResult.total);
+    const total = minMaxResult.total;
     const minId = minMaxResult.minId;
     const maxId = minMaxResult.maxId;
 
