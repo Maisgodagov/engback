@@ -7,13 +7,21 @@ import { prisma } from '../../shared/prisma/prismaClient';
 let xpColumnChecked = false;
 let streakTableChecked = false;
 
-const listUsers = async (): Promise<UserProfileDto[]> => {
+const listUsers = async (limit?: number, offset?: number): Promise<UserProfileDto[]> => {
   // OPTIMIZATION: Check xpColumn only once at startup
   if (!xpColumnChecked) {
     await ensureXpColumn();
   }
 
-  const users = await prisma.user.findMany({ orderBy: { createdAt: 'desc' } });
+  // CRITICAL FIX: Add pagination to prevent loading all 1000+ users at once
+  const take = limit && limit > 0 ? Math.min(limit, 100) : 100; // Max 100 per page
+  const skip = offset && offset > 0 ? offset : 0;
+
+  const users = await prisma.user.findMany({
+    orderBy: { createdAt: 'desc' },
+    take,
+    skip,
+  });
 
   // OPTIMIZATION: xpPoints is in User model (schema.prisma line 23), use it directly
   return users.map((user) => ({

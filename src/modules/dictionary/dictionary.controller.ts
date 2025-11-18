@@ -32,7 +32,11 @@ export const list = async (req: Request, res: Response) => {
     return;
   }
 
-  const items = await dictionaryService.list(userId);
+  // Add pagination support
+  const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+  const offset = req.query.offset ? parseInt(req.query.offset as string, 10) : undefined;
+
+  const items = await dictionaryService.list(userId, limit, offset);
   console.log('[Dictionary] Found items:', items.length);
   if (items.length > 0) {
     console.log('[Dictionary] First item:', items[0]);

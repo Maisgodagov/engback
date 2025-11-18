@@ -279,6 +279,8 @@ const UNWATCHED_POOL_MULTIPLIER = 6;
 const WATCHED_POOL_MULTIPLIER = 3;
 const TRANSCRIPT_BACKFILL_BATCH_SIZE = 200;
 const RECORD_FETCH_MULTIPLIER = 1.5;
+const MAX_CURSOR_IDS = 500; // Limit for pagination cursor to prevent memory/performance issues
+const MAX_USER_HISTORY = 2000; // Limit for user likes/progress to load
 
 const findPhraseMatches = (
   wordChunks: TranscriptWordChunk[],
@@ -574,18 +576,27 @@ const computeRecommendationScores = async (
   requestLimit: number = 10, // Add limit parameter
 ) => {
   // Fetch user data in parallel
+  // OPTIMIZATION: Limit how much user history we load to avoid memory issues
+  // For 50k videos, users could have 10k+ liked/watched videos
+
   const [likedRecords, topicPreferences, progressRecords] = await Promise.all([
     prisma.videoLike.findMany({
       where: { userId },
       select: { contentId: true },
+      orderBy: { createdAt: 'desc' },
+      take: MAX_USER_HISTORY, // Only recent likes matter for recommendations
     }),
     prisma.videoTopicPreference.findMany({
       where: { userId },
       select: { topic: true, likes: true },
+      orderBy: { likes: 'desc' },
+      take: 100, // Only top 100 topic preferences (enough for personalization)
     }),
     prisma.videoLearningProgress.findMany({
       where: { userId },
       select: { contentId: true, status: true },
+      orderBy: { updatedAt: 'desc' },
+      take: MAX_USER_HISTORY, // Only recent watch history
     }),
   ]);
 
@@ -634,58 +645,115 @@ const computeRecommendationScores = async (
     where: Prisma.VideoLearningContentWhereInput,
     poolMultiplier: number,
   ) => {
-    const total = await prisma.videoLearningContent.count({ where });
-    if (total === 0) return [];
-    const desired = Math.max(requestLimit * poolMultiplier, requestLimit);
+    // OPTIMIZATION: For large datasets, avoid skip + orderBy which causes "Out of sort memory"
+    // Instead, use ID range filtering which is much faster with indexes
+
+    // Get min/max IDs matching the filter (uses index, very fast)
+    const cefrLevels = where.cefrLevel && typeof where.cefrLevel === 'object' && 'in' in where.cefrLevel
+      ? where.cefrLevel.in as string[]
+      : null;
+    const speechSpeeds = where.speechSpeed && typeof where.speechSpeed === 'object' && 'in' in where.speechSpeed
+      ? where.speechSpeed.in as string[]
+      : null;
+    const excludeIds = where.id && typeof where.id === 'object' && 'notIn' in where.id
+      ? where.id.notIn as number[]
+      : null;
+
+    const [minMaxResult] = await prisma.$queryRaw<Array<{ minId: number; maxId: number; total: bigint }>>`
+      SELECT MIN(id) as minId, MAX(id) as maxId, COUNT(*) as total
+      FROM video_learning_content
+      WHERE ${where.isModerated !== undefined ? Prisma.sql`is_moderated = ${where.isModerated}` : Prisma.sql`1=1`}
+        ${where.isAdultContent !== undefined ? Prisma.sql`AND is_adult_content = ${where.isAdultContent}` : Prisma.sql``}
+        ${cefrLevels ? Prisma.sql`AND cefr_level IN (${Prisma.join(cefrLevels)})` : Prisma.sql``}
+        ${speechSpeeds ? Prisma.sql`AND speech_speed IN (${Prisma.join(speechSpeeds)})` : Prisma.sql``}
+        ${excludeIds ? Prisma.sql`AND id NOT IN (${Prisma.join(excludeIds)})` : Prisma.sql``}
+    `;
+
+    if (!minMaxResult || minMaxResult.total === 0n) return [];
+
+    const total = Number(minMaxResult.total);
+    const minId = minMaxResult.minId;
+    const maxId = minMaxResult.maxId;
+
+    // Adaptive pool size: smaller for large datasets
+    const adaptiveMultiplier = total > 1000 ? Math.min(poolMultiplier, 3) : poolMultiplier;
+    const desired = Math.max(requestLimit * adaptiveMultiplier, requestLimit);
     const takeLimit = Math.min(desired, total);
+
+    // Stage 1: Get random IDs using ID range (NO skip, NO orderBy on full table)
+    const selectedIds = new Set<number>();
     const chunkSize = Math.max(Math.ceil(requestLimit / 2), 5);
-    const maxAttempts = Math.min(12, Math.ceil(takeLimit / chunkSize) * 3);
-    const poolMap = new Map<number, PoolRecord>();
+    const maxAttempts = Math.min(8, Math.ceil(takeLimit / chunkSize) * 2);
 
-    for (let attempt = 0; attempt < maxAttempts && poolMap.size < takeLimit; attempt += 1) {
-      const remaining = total - chunkSize;
-      const skip =
-        remaining > 0 ? Math.floor(Math.random() * Math.max(remaining, 1)) : 0;
-      const chunk = await prisma.videoLearningContent.findMany({
-        where,
-        include: {
-          videoTopics: { select: { topic: true } },
-        },
-        skip,
-        take: Math.min(chunkSize, takeLimit - poolMap.size),
+    for (let attempt = 0; attempt < maxAttempts && selectedIds.size < takeLimit; attempt += 1) {
+      // Generate random ID in range instead of using skip
+      const randomId = Math.floor(Math.random() * (maxId - minId + 1)) + minId;
+
+      // Build where clause, preserving original filters but adding id range
+      const rangeWhere: Prisma.VideoLearningContentWhereInput = {
+        ...where,
+        id: where.id && typeof where.id === 'object' && 'notIn' in where.id
+          ? { gte: randomId, notIn: where.id.notIn as number[] }
+          : { gte: randomId },
+      };
+
+      const idChunk = await prisma.videoLearningContent.findMany({
+        where: rangeWhere,
+        select: { id: true },
+        take: Math.min(chunkSize, takeLimit - selectedIds.size),
+        orderBy: { id: 'asc' }, // Only sort the small chunk we're taking
       });
-      chunk.forEach((record) => {
-        if (!poolMap.has(record.id)) {
-          poolMap.set(record.id, record);
-        }
-      });
+
+      idChunk.forEach((record) => selectedIds.add(record.id));
     }
 
-    if (poolMap.size < takeLimit) {
-      const fallback = await prisma.videoLearningContent.findMany({
+    // Fallback: if still not enough, get first N records (fast with index)
+    if (selectedIds.size < takeLimit) {
+      const fallbackIds = await prisma.videoLearningContent.findMany({
         where,
-        include: {
-          videoTopics: { select: { topic: true } },
-        },
-        take: takeLimit - poolMap.size,
+        select: { id: true },
+        take: takeLimit - selectedIds.size,
+        orderBy: { id: 'asc' },
       });
-      fallback.forEach((record) => {
-        if (!poolMap.has(record.id)) {
-          poolMap.set(record.id, record);
-        }
-      });
+      fallbackIds.forEach((record) => selectedIds.add(record.id));
     }
 
-    return Array.from(poolMap.values()).slice(0, takeLimit);
+    if (selectedIds.size === 0) return [];
+
+    // Stage 2: Load full data with JOIN only for selected IDs
+    const records = await prisma.videoLearningContent.findMany({
+      where: {
+        id: { in: Array.from(selectedIds) },
+      },
+      include: {
+        videoTopics: { select: { topic: true } },
+      },
+    });
+
+    return records.slice(0, takeLimit);
   };
 
   // Fetch unwatched videos first (prioritize fresh content)
-  const unwatchedIdFilter = buildNotInFilter(excludeIds, watchedSet);
+  // CRITICAL FIX: Avoid NOT IN with huge lists (can cause MySQL to fail or be very slow)
+  // Instead, we filter in-memory after fetching, which is faster for large exclude sets
+  const combinedExcludeSet = new Set([...excludeIds, ...watchedSet]);
+
+  // Only use NOT IN if exclude list is small (< 100 IDs), otherwise filter in app
+  const useNotInFilter = combinedExcludeSet.size < 100;
   const unwatchedWhere: Prisma.VideoLearningContentWhereInput = {
     ...baseWhere,
-    id: unwatchedIdFilter ? { notIn: unwatchedIdFilter } : baseWhere.id,
+    ...(useNotInFilter && combinedExcludeSet.size > 0
+      ? { id: { notIn: Array.from(combinedExcludeSet) } }
+      : {}
+    ),
   };
-  const unwatchedVideos = await fetchRandomizedPool(unwatchedWhere, UNWATCHED_POOL_MULTIPLIER);
+
+  let unwatchedVideos = await fetchRandomizedPool(unwatchedWhere, UNWATCHED_POOL_MULTIPLIER);
+
+  // Filter in-memory if we didn't use NOT IN (for large exclude sets)
+  if (!useNotInFilter && combinedExcludeSet.size > 0) {
+    unwatchedVideos = unwatchedVideos.filter(video => !combinedExcludeSet.has(video.id));
+  }
 
   // Fetch watched videos as fallback (if user watched everything)
   let watchedVideos: typeof unwatchedVideos = [];
@@ -772,13 +840,22 @@ const getFeed = async (
 ): Promise<{ items: VideoFeedItem[]; nextCursor: string | null; hasMore: boolean }> => {
   const normalizedLimit = limit && limit > 0 ? limit : 1;
 
+  // PROTECTION: Limit cursor size to prevent memory/performance issues
+  // For infinite scroll, we don't need to track ALL seen videos forever
+
   const excludeIds = new Set<number>();
   if (cursor) {
-    cursor
+    const parsedIds = cursor
       .split(',')
       .map((value) => Number.parseInt(value.trim(), 10))
-      .filter((value) => Number.isInteger(value) && value > 0)
-      .forEach((value) => excludeIds.add(value));
+      .filter((value) => Number.isInteger(value) && value > 0);
+
+    // Only keep the most recent IDs if cursor is too large
+    const idsToUse = parsedIds.length > MAX_CURSOR_IDS
+      ? parsedIds.slice(-MAX_CURSOR_IDS) // Keep last N IDs
+      : parsedIds;
+
+    idsToUse.forEach((value) => excludeIds.add(value));
   }
 
   const { likedSet, statusMap, unwatched, watched } = await computeRecommendationScores(
@@ -820,13 +897,22 @@ const getFeed = async (
     };
   });
 
+  // Build next cursor with size limit protection
   const nextCursorSet = new Set<number>(excludeIds);
   for (const item of selected) {
     nextCursorSet.add(item.record.id);
   }
 
+  // PROTECTION: Limit cursor size to prevent it from growing infinitely
+  const nextCursorIds = Array.from(nextCursorSet);
+  const limitedCursorIds = nextCursorIds.length > MAX_CURSOR_IDS
+    ? nextCursorIds.slice(-MAX_CURSOR_IDS) // Keep last N IDs
+    : nextCursorIds;
+
   const nextCursor =
-    hasMore && nextCursorSet.size > 0 ? Array.from(nextCursorSet).sort((a, b) => a - b).join(',') : null;
+    hasMore && limitedCursorIds.length > 0
+      ? limitedCursorIds.sort((a, b) => a - b).join(',')
+      : null;
 
   return {
     items,

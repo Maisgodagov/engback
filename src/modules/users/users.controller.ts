@@ -2,8 +2,12 @@ import type { Request, Response } from 'express';
 
 import { usersService } from './users.service';
 
-export const list = async (_req: Request, res: Response) => {
-  const users = await usersService.listUsers();
+export const list = async (req: Request, res: Response) => {
+  // Add pagination support for 1000+ users
+  const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+  const offset = req.query.offset ? parseInt(req.query.offset as string, 10) : undefined;
+
+  const users = await usersService.listUsers(limit, offset);
   res.json(users);
 };
 

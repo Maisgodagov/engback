@@ -227,6 +227,10 @@ model VideoLearningContent {
   @@index([cefrLevel], map: "idx_cefr_level")
   @@index([processedAt], map: "idx_processed_at")
   @@index([status], map: "idx_status")
+  @@index([isModerated, isAdultContent, cefrLevel, speechSpeed], map: "idx_feed_filters")
+  @@index([speechSpeed], map: "idx_speech_speed")
+  @@index([isAdultContent], map: "idx_adult_content")
+  @@index([isModerated], map: "idx_moderated")
   @@fulltext([transcriptFull], map: "idx_transcript_full_fulltext")
   @@map("video_learning_content")
 }
@@ -281,6 +285,7 @@ model VideoLearningProgress {
 
   @@unique([userId, contentId])
   @@index([contentId])
+  @@index([userId, updatedAt], map: "idx_user_progress")
   @@map("video_learning_progress")
 }
 
@@ -294,6 +299,7 @@ model VideoLike {
 
   @@unique([userId, contentId])
   @@index([contentId])
+  @@index([userId, createdAt], map: "idx_user_likes")
   @@map("video_likes")
 }
 
