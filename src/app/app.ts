@@ -13,6 +13,7 @@ import { roadmapRouter } from '../modules/roadmap/roadmap.router';
 import { lessonsRouter } from '../modules/lessons/lessons.router';
 import { adminRouter } from '../modules/admin/admin.router';
 import { videoLearningRouter } from '../modules/video-learning/videoLearning.router';
+import { exercisesRouter } from '../modules/exercises/exercises.router';
 
 export const createApp = () => {
   const app = express();
@@ -62,6 +63,7 @@ export const createApp = () => {
   app.use('/api/lessons', lessonsRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/video-learning', videoLearningRouter);
+  app.use('/api/exercises', exercisesRouter);
 
   app.use(errorHandler);
 
