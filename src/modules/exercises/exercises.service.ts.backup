@@ -40,8 +40,8 @@ type Exercise = {
   progress: Progress;
 };
 
-const MAX_WORD_LIMIT = 100;
-const MAX_EXERCISE_LIMIT = 80;
+const MAX_WORD_LIMIT = 20;
+const MAX_EXERCISE_LIMIT = 40;
 const TOUCH_GOAL = 5;
 
 const uniqStrings = (values: string[]): string[] => {
@@ -125,8 +125,6 @@ export const exercisesService = {
       wordLimit && wordLimit > 0 ? wordLimit : uniqueIds.length,
     );
     const limitedWordIds = uniqueIds.slice(0, effectiveWordLimit);
-    console.log('[Exercises Service] Input wordIds:', uniqueIds.length);
-    console.log('[Exercises Service] Limited to:', limitedWordIds.length);
 
     if (!limitedWordIds.length) return [];
 
@@ -143,8 +141,6 @@ export const exercisesService = {
     );
 
     const candidateIds = limitedWordIds.filter((id) => !excludedIds.has(id));
-    console.log('[Exercises Service] Excluded (known/ignored):', excludedIds.size);
-    console.log('[Exercises Service] Candidate words:', candidateIds.length);
     if (!candidateIds.length) return [];
 
     const wordRows = await prisma.$queryRaw<DbWordRow[]>(Prisma.sql`
@@ -160,7 +156,6 @@ export const exercisesService = {
     `);
 
     if (!wordRows.length) return [];
-    console.log('[Exercises Service] Words with translations:', wordRows.length);
 
     const vocabRows = await prisma.$queryRaw<{ word_id: number }[]>(Prisma.sql`
       SELECT word_id FROM user_vocab
@@ -211,17 +206,13 @@ export const exercisesService = {
       exerciseLimit && exerciseLimit > 0 ? exerciseLimit : candidateIds.length * 2,
     );
 
-    const exerciseKeys = new Set<string>();
     const exercises: Exercise[] = [];
 
     for (const row of wordRows) {
       if (exercises.length >= maxExercises) break;
 
       const translations = parseTranslations(row.translations);
-      if (!translations.length) {
-        console.warn(`[Exercises Service] Word ${row.wordId} (${row.lemma}) has no translations`);
-        continue;
-      }
+      if (!translations.length) continue;
 
       const correctRu = translations[0];
       const progress = progressByWord.get(row.wordId) ?? {
@@ -237,10 +228,6 @@ export const exercisesService = {
         translationPool.filter((item) => item !== correctRu),
         translations.slice(1),
       );
-
-      const enRuKey = `${row.wordId}-en-ru`;
-      if (exerciseKeys.has(enRuKey)) continue;
-      exerciseKeys.add(enRuKey);
 
       exercises.push({
         wordId: row.wordId,
@@ -261,10 +248,6 @@ export const exercisesService = {
         lemmaPool.filter((item) => item !== row.lemma),
       );
 
-      const ruEnKey = `${row.wordId}-ru-en`;
-      if (exerciseKeys.has(ruEnKey)) continue;
-      exerciseKeys.add(ruEnKey);
-
       exercises.push({
         wordId: row.wordId,
         lemma: row.lemma,
@@ -278,7 +261,6 @@ export const exercisesService = {
       });
     }
 
-    console.log('[Exercises Service] Generated exercises:', exercises.length);
     return exercises.slice(0, maxExercises);
   },
 
