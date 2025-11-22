@@ -232,54 +232,68 @@ export const exercisesService = {
         addedToVocab: vocabSet.has(row.wordId),
       };
 
-      const enRuOptions = buildOptions(
-        correctRu,
-        translationPool.filter((item) => item !== correctRu),
-        translations.slice(1),
-      );
+      // Randomize direction generation:
+      // 75% chance: only one direction (randomly chosen)
+      // 25% chance: both directions
+      const random = Math.random();
+      const generateBoth = random < 0.25; // 25% chance for both
+      const generateEnRu = generateBoth || random >= 0.625; // 25% both + 37.5% only en-ru = 62.5%
+      const generateRuEn = generateBoth || (random >= 0.25 && random < 0.625); // 25% both + 37.5% only ru-en = 62.5%
 
-      const enRuKey = `${row.wordId}-en-ru`;
-      if (exerciseKeys.has(enRuKey)) continue;
-      exerciseKeys.add(enRuKey);
+      if (generateEnRu) {
+        const enRuKey = `${row.wordId}-en-ru`;
+        if (!exerciseKeys.has(enRuKey)) {
+          exerciseKeys.add(enRuKey);
 
-      exercises.push({
-        wordId: row.wordId,
-        lemma: row.lemma,
-        pos: row.pos,
-        direction: 'en-ru',
-        prompt: row.lemma,
-        correctAnswer: correctRu,
-        options: enRuOptions,
-        translations,
-        progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
-      });
+          const enRuOptions = buildOptions(
+            correctRu,
+            translationPool.filter((item) => item !== correctRu),
+            translations.slice(1),
+          );
+
+          exercises.push({
+            wordId: row.wordId,
+            lemma: row.lemma,
+            pos: row.pos,
+            direction: 'en-ru',
+            prompt: row.lemma,
+            correctAnswer: correctRu,
+            options: enRuOptions,
+            translations,
+            progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
+          });
+        }
+      }
 
       if (exercises.length >= maxExercises) break;
 
-      const ruEnOptions = buildOptions(
-        row.lemma,
-        lemmaPool.filter((item) => item !== row.lemma),
-      );
+      if (generateRuEn) {
+        const ruEnKey = `${row.wordId}-ru-en`;
+        if (!exerciseKeys.has(ruEnKey)) {
+          exerciseKeys.add(ruEnKey);
 
-      const ruEnKey = `${row.wordId}-ru-en`;
-      if (exerciseKeys.has(ruEnKey)) continue;
-      exerciseKeys.add(ruEnKey);
+          const ruEnOptions = buildOptions(
+            row.lemma,
+            lemmaPool.filter((item) => item !== row.lemma),
+          );
 
-      exercises.push({
-        wordId: row.wordId,
-        lemma: row.lemma,
-        pos: row.pos,
-        direction: 'ru-en',
-        prompt: correctRu,
-        correctAnswer: row.lemma,
-        options: ruEnOptions,
-        translations,
-        progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
-      });
+          exercises.push({
+            wordId: row.wordId,
+            lemma: row.lemma,
+            pos: row.pos,
+            direction: 'ru-en',
+            prompt: correctRu,
+            correctAnswer: row.lemma,
+            options: ruEnOptions,
+            translations,
+            progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
+          });
+        }
+      }
     }
 
     console.log('[Exercises Service] Generated exercises:', exercises.length);
-    return exercises.slice(0, maxExercises);
+    return shuffleArray(exercises.slice(0, maxExercises));
   },
 
   async submitAnswer(userId: string, wordId: number, isCorrect: boolean): Promise<Progress> {
