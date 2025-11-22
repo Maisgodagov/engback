@@ -149,14 +149,14 @@ export const exercisesService = {
 
     const wordRows = await prisma.$queryRaw<DbWordRow[]>(Prisma.sql`
       SELECT
-        w.word_id AS wordId,
+        w.id AS wordId,
         w.lemma,
         w.pos,
-        GROUP_CONCAT(t.translation ORDER BY t.translation SEPARATOR '||') AS translations
+        GROUP_CONCAT(t.translation ORDER BY t.priority SEPARATOR '||') AS translations
       FROM dict_words w
-      LEFT JOIN dict_translations t ON t.word_id = w.word_id
-      WHERE w.word_id IN (${Prisma.join(candidateIds)})
-      GROUP BY w.word_id, w.lemma, w.pos
+      LEFT JOIN dict_translations t ON t.word_id = w.id
+      WHERE w.id IN (${Prisma.join(candidateIds)})
+      GROUP BY w.id, w.lemma, w.pos
     `);
 
     if (!wordRows.length) return [];
@@ -191,7 +191,7 @@ export const exercisesService = {
     const lemmaPoolRows = await prisma.$queryRaw<{ lemma: string }[]>(Prisma.sql`
       SELECT lemma
       FROM dict_words
-      WHERE word_id NOT IN (${Prisma.join(candidateIds)})
+      WHERE id NOT IN (${Prisma.join(candidateIds)})
       ORDER BY RAND()
       LIMIT 200
     `);
