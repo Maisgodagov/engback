@@ -125,8 +125,6 @@ export const exercisesService = {
       wordLimit && wordLimit > 0 ? wordLimit : uniqueIds.length,
     );
     const limitedWordIds = uniqueIds.slice(0, effectiveWordLimit);
-    console.log('[Exercises Service] Input wordIds:', uniqueIds.length);
-    console.log('[Exercises Service] Limited to:', limitedWordIds.length);
 
     if (!limitedWordIds.length) return [];
 
@@ -143,8 +141,6 @@ export const exercisesService = {
     );
 
     const candidateIds = limitedWordIds.filter((id) => !excludedIds.has(id));
-    console.log('[Exercises Service] Excluded (known/ignored):', excludedIds.size);
-    console.log('[Exercises Service] Candidate words:', candidateIds.length);
     if (!candidateIds.length) return [];
 
     const wordRows = await prisma.$queryRaw<DbWordRow[]>(Prisma.sql`
@@ -160,7 +156,6 @@ export const exercisesService = {
     `);
 
     if (!wordRows.length) return [];
-    console.log('[Exercises Service] Words with translations:', wordRows.length);
 
     const vocabRows = await prisma.$queryRaw<{ word_id: number }[]>(Prisma.sql`
       SELECT word_id FROM user_vocab
@@ -180,20 +175,22 @@ export const exercisesService = {
       progressByWord.set(Number(row.word_id), progress);
     });
 
+    // Use offset-based randomization instead of ORDER BY RAND() for better performance
+    const randomOffset1 = Math.floor(Math.random() * 1000);
+    const randomOffset2 = Math.floor(Math.random() * 1000);
+
     const translationPoolRows = await prisma.$queryRaw<{ translation: string }[]>(Prisma.sql`
       SELECT translation
       FROM dict_translations
       WHERE word_id NOT IN (${Prisma.join(candidateIds)})
-      ORDER BY RAND()
-      LIMIT 200
+      LIMIT 200 OFFSET ${randomOffset1}
     `);
 
     const lemmaPoolRows = await prisma.$queryRaw<{ lemma: string }[]>(Prisma.sql`
       SELECT lemma
       FROM dict_words
       WHERE id NOT IN (${Prisma.join(candidateIds)})
-      ORDER BY RAND()
-      LIMIT 200
+      LIMIT 200 OFFSET ${randomOffset2}
     `);
 
     const translationPool = uniqStrings([
@@ -218,10 +215,7 @@ export const exercisesService = {
       if (exercises.length >= maxExercises) break;
 
       const translations = parseTranslations(row.translations);
-      if (!translations.length) {
-        console.warn(`[Exercises Service] Word ${row.wordId} (${row.lemma}) has no translations`);
-        continue;
-      }
+      if (!translations.length) continue;
 
       const correctRu = translations[0];
       const progress = progressByWord.get(row.wordId) ?? {
@@ -292,7 +286,6 @@ export const exercisesService = {
       }
     }
 
-    console.log('[Exercises Service] Generated exercises:', exercises.length);
     return shuffleArray(exercises.slice(0, maxExercises));
   },
 
@@ -321,6 +314,7 @@ export const exercisesService = {
         END;
     `);
 
+    // Fetch updated progress - needed to return accurate values after update
     return fetchProgress(userId, wordId);
   },
 

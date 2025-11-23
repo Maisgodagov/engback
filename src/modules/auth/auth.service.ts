@@ -83,10 +83,25 @@ const register = async ({ email, fullName, role, password }: RegisterInput) => {
 };
 
 const listUsers = async (): Promise<UserProfileDto[]> => {
-  const users = await prisma.user.findMany({ orderBy: { createdAt: 'desc' } });
-  const profiles: UserProfileDto[] = [];
-  for (const u of users) profiles.push(await mapToProfile(u));
-  return profiles;
+  await ensureXpColumn();
+
+  // OPTIMIZATION: Single query instead of N+1 (1 query vs 100+ queries for 100 users)
+  const users = await prisma.user.findMany({
+    orderBy: { createdAt: 'desc' }
+  });
+
+  // User model already has xpPoints field, no need for separate queries
+  return users.map(user => ({
+    id: user.id,
+    email: user.email,
+    fullName: user.fullName,
+    role: user.role as UserRole,
+    avatarUrl: user.avatarUrl ?? undefined,
+    streakDays: user.streakDays,
+    completedLessons: user.completedLessons,
+    level: user.level,
+    xpPoints: user.xpPoints ?? 0,
+  }));
 };
 
 const logout = async () => {

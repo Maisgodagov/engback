@@ -3,8 +3,6 @@ import type { CreateUserWordInput } from './dictionary.schemas';
 
 export const dictionaryService = {
   async list(userId: string, limit?: number, offset?: number) {
-    console.log('[DictionaryService] Querying database for userId:', userId);
-
     // CRITICAL FIX: Add pagination to prevent loading 10,000+ words at once
     const take = limit && limit > 0 ? Math.min(limit, 500) : 100; // Default 100, max 500
     const skip = offset && offset > 0 ? offset : 0;
@@ -15,7 +13,6 @@ export const dictionaryService = {
       take,
       skip,
     });
-    console.log('[DictionaryService] Query result count:', result.length);
     return result;
   },
 
