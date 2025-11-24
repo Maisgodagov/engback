@@ -18,18 +18,23 @@ const getUserId = (req: Request): string | null => {
 
 export const getExercises = async (req: Request, res: Response) => {
   const userId = getUserId(req);
+  console.log(`[CONTROLLER] 📨 getExercises request from userId: ${userId}`);
+
   if (!userId) {
+    console.log(`[CONTROLLER] ❌ Missing userId`);
     res.status(401).json({ message: 'Missing user identifier' });
     return;
   }
 
   const parseResult = getExercisesSchema.safeParse(req.body);
   if (!parseResult.success) {
+    console.log(`[CONTROLLER] ❌ Invalid request body:`, parseResult.error.issues);
     res.status(400).json({ message: 'Invalid request', issues: parseResult.error.issues });
     return;
   }
 
   const { wordIds, wordLimit, exerciseLimit } = parseResult.data;
+  console.log(`[CONTROLLER] 📦 Request params: wordIds.length=${wordIds.length}, wordLimit=${wordLimit}, exerciseLimit=${exerciseLimit}`);
 
   try {
     const exercises = await exercisesService.getExercisesForUser(
@@ -38,9 +43,10 @@ export const getExercises = async (req: Request, res: Response) => {
       wordLimit,
       exerciseLimit,
     );
+    console.log(`[CONTROLLER] ✅ Sending ${exercises.length} exercises to client`);
     res.json({ exercises });
   } catch (error) {
-    console.error('Failed to get exercises', error);
+    console.error('[CONTROLLER] ❌ Failed to get exercises', error);
     res.status(500).json({ message: 'Failed to get exercises' });
   }
 };

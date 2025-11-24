@@ -119,14 +119,24 @@ export const exercisesService = {
     wordLimit?: number,
     exerciseLimit?: number,
   ): Promise<Exercise[]> {
+    console.log(`[EXERCISES] 📥 Received request for userId: ${userId}`);
+    console.log(`[EXERCISES] 📥 Total wordIds: ${wordIds.length}`);
+    console.log(`[EXERCISES] 📥 First 20 wordIds:`, wordIds.slice(0, 20));
+
     const uniqueIds = Array.from(new Set(wordIds.map((id) => Number(id)).filter(Number.isInteger)));
+    console.log(`[EXERCISES] 🔢 Unique wordIds: ${uniqueIds.length}`);
+
     const effectiveWordLimit = Math.min(
       MAX_WORD_LIMIT,
       wordLimit && wordLimit > 0 ? wordLimit : uniqueIds.length,
     );
     const limitedWordIds = uniqueIds.slice(0, effectiveWordLimit);
+    console.log(`[EXERCISES] 🎯 Limited to ${limitedWordIds.length} words (limit: ${effectiveWordLimit})`);
 
-    if (!limitedWordIds.length) return [];
+    if (!limitedWordIds.length) {
+      console.log(`[EXERCISES] ⚠️  No valid wordIds, returning empty array`);
+      return [];
+    }
 
     const progressRows = await prisma.$queryRaw<DbProgressRow[]>(Prisma.sql`
       SELECT word_id, status, touches_total, touches_correct, streak, added_to_vocab
@@ -141,7 +151,13 @@ export const exercisesService = {
     );
 
     const candidateIds = limitedWordIds.filter((id) => !excludedIds.has(id));
-    if (!candidateIds.length) return [];
+    console.log(`[EXERCISES] 🔍 After filtering known/ignored: ${candidateIds.length} candidates`);
+    console.log(`[EXERCISES] 🔍 Candidate IDs (first 20):`, candidateIds.slice(0, 20));
+
+    if (!candidateIds.length) {
+      console.log(`[EXERCISES] ⚠️  No candidate words after filtering, returning empty`);
+      return [];
+    }
 
     const wordRows = await prisma.$queryRaw<DbWordRow[]>(Prisma.sql`
       SELECT
@@ -153,7 +169,15 @@ export const exercisesService = {
       WHERE m.id IN (${Prisma.join(candidateIds)})
     `);
 
-    if (!wordRows.length) return [];
+    console.log(`[EXERCISES] 📖 Found ${wordRows.length} words in mueller_dictionary`);
+    if (wordRows.length > 0) {
+      console.log(`[EXERCISES] 📖 First 5 words:`, wordRows.slice(0, 5).map(w => ({ id: w.wordId, word: w.word })));
+    }
+
+    if (!wordRows.length) {
+      console.log(`[EXERCISES] ⚠️  No words found in mueller_dictionary for given IDs!`);
+      return [];
+    }
 
     const vocabRows = await prisma.$queryRaw<{ word_id: number }[]>(Prisma.sql`
       SELECT word_id FROM user_vocab
@@ -284,7 +308,17 @@ export const exercisesService = {
       }
     }
 
-    return shuffleArray(exercises.slice(0, maxExercises));
+    const finalExercises = shuffleArray(exercises.slice(0, maxExercises));
+    console.log(`[EXERCISES] ✅ Returning ${finalExercises.length} exercises`);
+    if (finalExercises.length > 0) {
+      console.log(`[EXERCISES] ✅ First 3 exercises:`, finalExercises.slice(0, 3).map(e => ({
+        wordId: e.wordId,
+        word: e.word,
+        direction: e.direction,
+        prompt: e.prompt.substring(0, 30)
+      })));
+    }
+    return finalExercises;
   },
 
   async submitAnswer(userId: string, wordId: number, isCorrect: boolean): Promise<Progress> {
