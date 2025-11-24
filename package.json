@@ -22,7 +22,7 @@
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "express": "^4.19.2",
+    "express": "^4.21.2",
     "helmet": "^8.0.1",
     "lru-cache": "^11.2.2",
     "morgan": "^1.10.0",

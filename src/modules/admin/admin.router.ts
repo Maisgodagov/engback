@@ -1,8 +1,12 @@
 import { Router } from 'express';
 
-import { requireAdmin } from '../../shared/middleware/requireAdmin';
-import { getCatalog } from './admin.controller';
+import { adminController } from './admin.controller';
 
-export const adminRouter = Router();
+const router = Router();
 
-adminRouter.get('/catalog', requireAdmin, getCatalog);
+router.get('/words', adminController.getWords);
+router.put('/words/:id', adminController.updateWord);
+router.delete('/words/:id', adminController.deleteWord);
+router.patch('/words/:id/moderate', adminController.moderateWord);
+
+export default router;

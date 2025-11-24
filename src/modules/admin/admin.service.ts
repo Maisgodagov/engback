@@ -1,115 +1,104 @@
+import { Prisma } from '@prisma/client';
+
 import { prisma } from '../../shared/prisma/prismaClient';
-import type {
-  AdminCatalogDto,
-  AdminCourseDto,
-  AdminModuleDto,
-} from '../../shared/types';
-import { lessonsService } from '../lessons/lessons.service';
 
-const parseDifficultyLevels = (value?: string | null) =>
-  (value ?? '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-const listCourses = async (): Promise<AdminCourseDto[]> => {
-  const records = await prisma.course.findMany({
-    orderBy: { updatedAt: 'desc' },
-    include: {
-      modules: {
-        orderBy: { order: 'asc' },
-        include: {
-          module: {
-            include: {
-              lessons: true,
-            },
-          },
-        },
-      },
-    },
-  });
-
-  return records.map((course) => ({
-    id: course.id,
-    title: course.title,
-    description: course.description ?? undefined,
-    imageUrl: course.imageUrl ?? undefined,
-    price: course.price?.toString() ?? '0',
-    difficultyLevels: parseDifficultyLevels(course.difficultyLevels),
-    isPublished: course.isPublished,
-    modules: course.modules.map((courseModule) => ({
-      id: courseModule.module.id,
-      title: courseModule.module.title,
-      description: courseModule.module.description ?? undefined,
-      order: courseModule.order,
-      lessonCount: courseModule.module.lessons.length,
-    })),
-    updatedAt: course.updatedAt.toISOString(),
-  }));
-};
-
-const listModules = async (): Promise<AdminModuleDto[]> => {
-  const records = await prisma.module.findMany({
-    orderBy: { updatedAt: 'desc' },
-    include: {
-      lessons: {
-        orderBy: { order: 'asc' },
-        include: {
-          lesson: true,
-        },
-      },
-      courses: {
-        orderBy: { order: 'asc' },
-        include: {
-          course: {
-            select: {
-              id: true,
-              title: true,
-            },
-          },
-        },
-      },
-    },
-  });
-
-  return records.map((module) => ({
-    id: module.id,
-    title: module.title,
-    description: module.description ?? undefined,
-    imageUrl: module.imageUrl ?? undefined,
-    lessons: module.lessons.map((moduleLesson) => ({
-      id: moduleLesson.lesson.id,
-      title: moduleLesson.lesson.title,
-      order: moduleLesson.order,
-      xpReward: moduleLesson.lesson.xpReward,
-    })),
-    courses: module.courses
-      .filter((courseLink) => courseLink.course)
-      .map((courseLink) => ({
-        id: courseLink.course.id,
-        title: courseLink.course.title,
-        order: courseLink.order,
-      })),
-    updatedAt: module.updatedAt.toISOString(),
-  }));
-};
-
-const getCatalog = async (): Promise<AdminCatalogDto> => {
-  const [courses, modules, lessonsResult] = await Promise.all([
-    listCourses(),
-    listModules(),
-    lessonsService.listLessons({ limit: 500 }),
-  ]);
-
-  return {
-    courses,
-    modules,
-    lessons: lessonsResult.items,
-  };
+type MuellerWord = {
+  id: number;
+  word: string;
+  part_of_speech: string | null;
+  translations: string;
+  moderated: number;
 };
 
 export const adminService = {
-  listCourses,
-  listModules,
-  getCatalog,
+  async getWords(
+    page: number,
+    limit: number,
+    moderatedFilter?: string,
+  ): Promise<{ words: MuellerWord[]; total: number; page: number; totalPages: number }> {
+    const offset = (page - 1) * limit;
+
+    let whereClause = Prisma.empty;
+    if (moderatedFilter === 'true') {
+      whereClause = Prisma.sql\`WHERE moderated = 1\`;
+    } else if (moderatedFilter === 'false') {
+      whereClause = Prisma.sql\`WHERE moderated = 0\`;
+    }
+
+    const countQuery =
+      moderatedFilter === 'true'
+        ? Prisma.sql\`SELECT COUNT(*) as total FROM mueller_dictionary WHERE moderated = 1\`
+        : moderatedFilter === 'false'
+          ? Prisma.sql\`SELECT COUNT(*) as total FROM mueller_dictionary WHERE moderated = 0\`
+          : Prisma.sql\`SELECT COUNT(*) as total FROM mueller_dictionary\`;
+
+    const [countResult] = await prisma.$queryRaw<{ total: bigint }[]>(countQuery);
+    const total = Number(countResult.total);
+
+    const wordsQuery =
+      moderatedFilter === 'true'
+        ? Prisma.sql\`
+      SELECT id, word, part_of_speech, translations, moderated
+      FROM mueller_dictionary
+      WHERE moderated = 1
+      ORDER BY id
+      LIMIT \${limit} OFFSET \${offset}
+    \`
+        : moderatedFilter === 'false'
+          ? Prisma.sql\`
+      SELECT id, word, part_of_speech, translations, moderated
+      FROM mueller_dictionary
+      WHERE moderated = 0
+      ORDER BY id
+      LIMIT \${limit} OFFSET \${offset}
+    \`
+          : Prisma.sql\`
+      SELECT id, word, part_of_speech, translations, moderated
+      FROM mueller_dictionary
+      ORDER BY id
+      LIMIT \${limit} OFFSET \${offset}
+    \`;
+
+    const words = await prisma.$queryRaw<MuellerWord[]>(wordsQuery);
+
+    return {
+      words,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    };
+  },
+
+  async updateWord(
+    id: number,
+    word: string,
+    partOfSpeech: string | null,
+    translations: string[],
+  ): Promise<void> {
+    const translationsStr = translations.join('||');
+
+    await prisma.$executeRaw(Prisma.sql\`
+      UPDATE mueller_dictionary
+      SET word = \${word},
+          part_of_speech = \${partOfSpeech},
+          translations = \${translationsStr}
+      WHERE id = \${id}
+    \`);
+  },
+
+  async deleteWord(id: number): Promise<void> {
+    await prisma.$executeRaw(Prisma.sql\`
+      DELETE FROM mueller_dictionary WHERE id = \${id}
+    \`);
+  },
+
+  async moderateWord(id: number, moderated: boolean): Promise<void> {
+    const moderatedInt = moderated ? 1 : 0;
+
+    await prisma.$executeRaw(Prisma.sql\`
+      UPDATE mueller_dictionary
+      SET moderated = \${moderatedInt}
+      WHERE id = \${id}
+    \`);
+  },
 };

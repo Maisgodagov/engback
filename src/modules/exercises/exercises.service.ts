@@ -172,6 +172,7 @@ export const exercisesService = {
         m.translations
       FROM mueller_dictionary m
       WHERE m.id IN (${Prisma.join(candidateIds)})
+        AND m.moderated = 1
     `);
 
     console.log(`[EXERCISES] 📖 Found ${wordRows.length} words in mueller_dictionary`);
@@ -210,6 +211,7 @@ export const exercisesService = {
       SELECT translations
       FROM mueller_dictionary
       WHERE id NOT IN (${Prisma.join(candidateIds)})
+        AND moderated = 1
       LIMIT 200 OFFSET ${randomOffset1}
     `);
 
@@ -217,6 +219,7 @@ export const exercisesService = {
       SELECT word
       FROM mueller_dictionary
       WHERE id NOT IN (${Prisma.join(candidateIds)})
+        AND moderated = 1
       LIMIT 200 OFFSET ${randomOffset2}
     `);
 
