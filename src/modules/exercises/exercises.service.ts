@@ -221,8 +221,8 @@ export const exercisesService = {
     `);
 
     const translationPool = uniqStrings([
-      ...translationPoolRows.flatMap((row) => parseTranslations(row.translations)),
-      ...wordRows.flatMap((row) => parseTranslations(row.translations)),
+      ...translationPoolRows.map((row) => parseTranslations(row.translations)[0]).filter(Boolean),
+      ...wordRows.map((row) => parseTranslations(row.translations)[0]).filter(Boolean),
     ]);
 
     const wordPool = uniqStrings([
@@ -269,7 +269,6 @@ export const exercisesService = {
           const enRuOptions = buildOptions(
             correctRu,
             translationPool.filter((item) => item !== correctRu),
-            translations.slice(1),
           );
 
           exercises.push({
