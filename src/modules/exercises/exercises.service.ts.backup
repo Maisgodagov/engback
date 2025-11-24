@@ -68,12 +68,7 @@ const parseTranslations = (value: string | null): string[] => {
   if (!value) return [];
   return value
     .split('||')
-    .map((item) => {
-      // Remove quotes and numbering like "1) text" or 1) text
-      let cleaned = item.trim().replace(/^["']|["']$/g, '');
-      cleaned = cleaned.replace(/^\d+\)\s*/, '');
-      return cleaned.trim();
-    })
+    .map((item) => item.trim())
     .filter(Boolean);
 };
 
