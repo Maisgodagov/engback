@@ -4,8 +4,8 @@ import { prisma } from '../../shared/prisma/prismaClient';
 
 type DbWordRow = {
   wordId: number;
-  lemma: string;
-  pos: string | null;
+  word: string;
+  partOfSpeech: string | null;
   translations: string | null;
 };
 
@@ -30,8 +30,8 @@ type ExerciseDirection = 'en-ru' | 'ru-en';
 
 type Exercise = {
   wordId: number;
-  lemma: string;
-  pos: string | null;
+  word: string;
+  partOfSpeech: string | null;
   direction: ExerciseDirection;
   prompt: string;
   correctAnswer: string;
@@ -145,14 +145,12 @@ export const exercisesService = {
 
     const wordRows = await prisma.$queryRaw<DbWordRow[]>(Prisma.sql`
       SELECT
-        w.id AS wordId,
-        w.lemma,
-        w.pos,
-        GROUP_CONCAT(t.translation ORDER BY t.priority SEPARATOR '||') AS translations
-      FROM dict_words w
-      LEFT JOIN dict_translations t ON t.word_id = w.id
-      WHERE w.id IN (${Prisma.join(candidateIds)})
-      GROUP BY w.id, w.lemma, w.pos
+        m.id AS wordId,
+        m.word,
+        m.part_of_speech AS partOfSpeech,
+        m.translations
+      FROM mueller_dictionary m
+      WHERE m.id IN (${Prisma.join(candidateIds)})
     `);
 
     if (!wordRows.length) return [];
@@ -179,28 +177,28 @@ export const exercisesService = {
     const randomOffset1 = Math.floor(Math.random() * 1000);
     const randomOffset2 = Math.floor(Math.random() * 1000);
 
-    const translationPoolRows = await prisma.$queryRaw<{ translation: string }[]>(Prisma.sql`
-      SELECT translation
-      FROM dict_translations
-      WHERE word_id NOT IN (${Prisma.join(candidateIds)})
+    const translationPoolRows = await prisma.$queryRaw<{ translations: string }[]>(Prisma.sql`
+      SELECT translations
+      FROM mueller_dictionary
+      WHERE id NOT IN (${Prisma.join(candidateIds)})
       LIMIT 200 OFFSET ${randomOffset1}
     `);
 
-    const lemmaPoolRows = await prisma.$queryRaw<{ lemma: string }[]>(Prisma.sql`
-      SELECT lemma
-      FROM dict_words
+    const wordPoolRows = await prisma.$queryRaw<{ word: string }[]>(Prisma.sql`
+      SELECT word
+      FROM mueller_dictionary
       WHERE id NOT IN (${Prisma.join(candidateIds)})
       LIMIT 200 OFFSET ${randomOffset2}
     `);
 
     const translationPool = uniqStrings([
-      ...translationPoolRows.map((row) => row.translation),
+      ...translationPoolRows.flatMap((row) => parseTranslations(row.translations)),
       ...wordRows.flatMap((row) => parseTranslations(row.translations)),
     ]);
 
-    const lemmaPool = uniqStrings([
-      ...lemmaPoolRows.map((row) => row.lemma),
-      ...wordRows.map((row) => row.lemma),
+    const wordPool = uniqStrings([
+      ...wordPoolRows.map((row) => row.word),
+      ...wordRows.map((row) => row.word),
     ]);
 
     const maxExercises = Math.min(
@@ -247,10 +245,10 @@ export const exercisesService = {
 
           exercises.push({
             wordId: row.wordId,
-            lemma: row.lemma,
-            pos: row.pos,
+            word: row.word,
+            partOfSpeech: row.partOfSpeech,
             direction: 'en-ru',
-            prompt: row.lemma,
+            prompt: row.word,
             correctAnswer: correctRu,
             options: enRuOptions,
             translations,
@@ -267,17 +265,17 @@ export const exercisesService = {
           exerciseKeys.add(ruEnKey);
 
           const ruEnOptions = buildOptions(
-            row.lemma,
-            lemmaPool.filter((item) => item !== row.lemma),
+            row.word,
+            wordPool.filter((item) => item !== row.word),
           );
 
           exercises.push({
             wordId: row.wordId,
-            lemma: row.lemma,
-            pos: row.pos,
+            word: row.word,
+            partOfSpeech: row.partOfSpeech,
             direction: 'ru-en',
             prompt: correctRu,
-            correctAnswer: row.lemma,
+            correctAnswer: row.word,
             options: ruEnOptions,
             translations,
             progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },

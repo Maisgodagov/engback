@@ -14,6 +14,7 @@ import { lessonsRouter } from '../modules/lessons/lessons.router';
 import { adminRouter } from '../modules/admin/admin.router';
 import { videoLearningRouter } from '../modules/video-learning/videoLearning.router';
 import { exercisesRouter } from '../modules/exercises/exercises.router';
+import { muellerRouter } from '../modules/mueller/mueller.router';
 
 export const createApp = () => {
   const app = express();
@@ -64,6 +65,7 @@ export const createApp = () => {
   app.use('/api/admin', adminRouter);
   app.use('/api/video-learning', videoLearningRouter);
   app.use('/api/exercises', exercisesRouter);
+  app.use('/api/mueller', muellerRouter);
 
   app.use(errorHandler);
 

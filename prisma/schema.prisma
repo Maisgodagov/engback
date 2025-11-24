@@ -399,3 +399,28 @@ enum video_transcriptions_status {
   completed
   failed
 }
+
+model MuellerDictionary {
+  id            Int      @id
+  word          String   @db.VarChar(100)
+  partOfSpeech  String?  @map("part_of_speech") @db.VarChar(50)
+  translations  String   @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([word], map: "idx_mueller_word")
+  @@index([partOfSpeech], map: "idx_mueller_part_of_speech")
+  @@fulltext([word], map: "idx_word_fulltext")
+  @@fulltext([translations], map: "idx_translations_fulltext")
+  @@map("mueller_dictionary")
+}
+
+model MuellerWordIndex {
+  wordNormalized String @map("word_normalized") @db.VarChar(100)
+  muellerId      Int    @map("mueller_id")
+
+  @@id([wordNormalized, muellerId])
+  @@index([wordNormalized], map: "idx_word_normalized")
+  @@index([muellerId], map: "idx_mueller_id")
+  @@map("mueller_word_index")
+}
