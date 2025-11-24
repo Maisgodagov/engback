@@ -275,7 +275,7 @@ export const exercisesService = {
             prompt: row.word,
             correctAnswer: correctRu,
             options: enRuOptions,
-            translations,
+            translations: [correctRu],
             progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
           });
         }
@@ -301,7 +301,7 @@ export const exercisesService = {
             prompt: correctRu,
             correctAnswer: row.word,
             options: ruEnOptions,
-            translations,
+            translations: [correctRu],
             progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
           });
         }
