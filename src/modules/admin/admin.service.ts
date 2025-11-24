@@ -35,7 +35,7 @@ export const adminService = {
       FROM mueller_dictionary
       WHERE moderated = 1
       ORDER BY id
-      LIMIT \${limit} OFFSET \${offset}
+      LIMIT ${limit} OFFSET ${offset}
     `
         : moderatedFilter === 'false'
           ? Prisma.sql`
@@ -43,13 +43,13 @@ export const adminService = {
       FROM mueller_dictionary
       WHERE moderated = 0
       ORDER BY id
-      LIMIT \${limit} OFFSET \${offset}
+      LIMIT ${limit} OFFSET ${offset}
     `
           : Prisma.sql`
       SELECT id, word, part_of_speech, translations, moderated
       FROM mueller_dictionary
       ORDER BY id
-      LIMIT \${limit} OFFSET \${offset}
+      LIMIT ${limit} OFFSET ${offset}
     `;
 
     const words = await prisma.$queryRaw<MuellerWord[]>(wordsQuery);
@@ -72,16 +72,16 @@ export const adminService = {
 
     await prisma.$executeRaw(Prisma.sql`
       UPDATE mueller_dictionary
-      SET word = \${word},
-          part_of_speech = \${partOfSpeech},
-          translations = \${translationsStr}
-      WHERE id = \${id}
+      SET word = ${word},
+          part_of_speech = ${partOfSpeech},
+          translations = ${translationsStr}
+      WHERE id = ${id}
     `);
   },
 
   async deleteWord(id: number): Promise<void> {
     await prisma.$executeRaw(Prisma.sql`
-      DELETE FROM mueller_dictionary WHERE id = \${id}
+      DELETE FROM mueller_dictionary WHERE id = ${id}
     `);
   },
 
@@ -90,8 +90,8 @@ export const adminService = {
 
     await prisma.$executeRaw(Prisma.sql`
       UPDATE mueller_dictionary
-      SET moderated = \${moderatedInt}
-      WHERE id = \${id}
+      SET moderated = ${moderatedInt}
+      WHERE id = ${id}
     `);
   },
 };
