@@ -2,11 +2,16 @@ import { Prisma } from '@prisma/client';
 
 import { prisma } from '../../shared/prisma/prismaClient';
 
-type DbWordRow = {
+type DbPrecomputedRow = {
   wordId: number;
   word: string;
   partOfSpeech: string | null;
   translations: string | null;
+  direction: ExerciseDirection;
+  prompt: string;
+  correctAnswer: string;
+  options: string;
+  moderated: number;
 };
 
 type DbProgressRow = {
@@ -69,9 +74,8 @@ const parseTranslations = (value: string | null): string[] => {
   return value
     .split('||')
     .map((item) => {
-      // Remove quotes and numbering like "1) text" or 1) text
       let cleaned = item.trim().replace(/^["']|["']$/g, '');
-      cleaned = cleaned.replace(/^\d+\)\s*/, '');
+      cleaned = cleaned.replace(/^[\(\s]*\d+\)\s*/, '');
       return cleaned.trim();
     })
     .filter(Boolean);
@@ -124,22 +128,22 @@ export const exercisesService = {
     wordLimit?: number,
     exerciseLimit?: number,
   ): Promise<Exercise[]> {
-    console.log(`[EXERCISES] 📥 Received request for userId: ${userId}`);
-    console.log(`[EXERCISES] 📥 Total wordIds: ${wordIds.length}`);
-    console.log(`[EXERCISES] 📥 First 20 wordIds:`, wordIds.slice(0, 20));
+    console.log(`[EXERCISES] Received request for userId: ${userId}`);
+    console.log(`[EXERCISES] Total wordIds: ${wordIds.length}`);
+    console.log(`[EXERCISES] First 20 wordIds:`, wordIds.slice(0, 20));
 
     const uniqueIds = Array.from(new Set(wordIds.map((id) => Number(id)).filter(Number.isInteger)));
-    console.log(`[EXERCISES] 🔢 Unique wordIds: ${uniqueIds.length}`);
+    console.log(`[EXERCISES] Unique wordIds: ${uniqueIds.length}`);
 
     const effectiveWordLimit = Math.min(
       MAX_WORD_LIMIT,
       wordLimit && wordLimit > 0 ? wordLimit : uniqueIds.length,
     );
     const limitedWordIds = uniqueIds.slice(0, effectiveWordLimit);
-    console.log(`[EXERCISES] 🎯 Limited to ${limitedWordIds.length} words (limit: ${effectiveWordLimit})`);
+    console.log(`[EXERCISES] Limited to ${limitedWordIds.length} words (limit: ${effectiveWordLimit})`);
 
     if (!limitedWordIds.length) {
-      console.log(`[EXERCISES] ⚠️  No valid wordIds, returning empty array`);
+      console.log(`[EXERCISES] No valid wordIds, returning empty array`);
       return [];
     }
 
@@ -156,32 +160,40 @@ export const exercisesService = {
     );
 
     const candidateIds = limitedWordIds.filter((id) => !excludedIds.has(id));
-    console.log(`[EXERCISES] 🔍 After filtering known/ignored: ${candidateIds.length} candidates`);
-    console.log(`[EXERCISES] 🔍 Candidate IDs (first 20):`, candidateIds.slice(0, 20));
+    console.log(`[EXERCISES] After filtering known/ignored: ${candidateIds.length} candidates`);
+    console.log(`[EXERCISES] Candidate IDs (first 20):`, candidateIds.slice(0, 20));
 
     if (!candidateIds.length) {
-      console.log(`[EXERCISES] ⚠️  No candidate words after filtering, returning empty`);
+      console.log(`[EXERCISES] No candidate words after filtering, returning empty`);
       return [];
     }
 
-    const wordRows = await prisma.$queryRaw<DbWordRow[]>(Prisma.sql`
+    const exerciseRows = await prisma.$queryRaw<DbPrecomputedRow[]>(Prisma.sql`
       SELECT
-        m.id AS wordId,
-        m.word,
-        m.part_of_speech AS partOfSpeech,
-        m.translations
-      FROM mueller_dictionary m
-      WHERE m.id IN (${Prisma.join(candidateIds)})
-        AND m.moderated = 1
+        word_id AS wordId,
+        word,
+        part_of_speech AS partOfSpeech,
+        translations,
+        direction,
+        prompt,
+        correct_answer AS correctAnswer,
+        options,
+        moderated
+      FROM precomputed_exercises
+      WHERE word_id IN (${Prisma.join(candidateIds)})
+        AND moderated = 1
     `);
 
-    console.log(`[EXERCISES] 📖 Found ${wordRows.length} words in mueller_dictionary`);
-    if (wordRows.length > 0) {
-      console.log(`[EXERCISES] 📖 First 5 words:`, wordRows.slice(0, 5).map(w => ({ id: w.wordId, word: w.word })));
+    console.log(`[EXERCISES] Found ${exerciseRows.length} precomputed exercises rows`);
+    if (exerciseRows.length > 0) {
+      console.log(
+        `[EXERCISES] First 5 rows:`,
+        exerciseRows.slice(0, 5).map((w) => ({ id: w.wordId, word: w.word, dir: w.direction })),
+      );
     }
 
-    if (!wordRows.length) {
-      console.log(`[EXERCISES] ⚠️  No words found in mueller_dictionary for given IDs!`);
+    if (!exerciseRows.length) {
+      console.log(`[EXERCISES] No precomputed exercises for given IDs!`);
       return [];
     }
 
@@ -203,51 +215,25 @@ export const exercisesService = {
       progressByWord.set(Number(row.word_id), progress);
     });
 
-    // Use offset-based randomization instead of ORDER BY RAND() for better performance
-    const randomOffset1 = Math.floor(Math.random() * 1000);
-    const randomOffset2 = Math.floor(Math.random() * 1000);
-
-    const translationPoolRows = await prisma.$queryRaw<{ translations: string }[]>(Prisma.sql`
-      SELECT translations
-      FROM mueller_dictionary
-      WHERE id NOT IN (${Prisma.join(candidateIds)})
-        AND moderated = 1
-      LIMIT 200 OFFSET ${randomOffset1}
-    `);
-
-    const wordPoolRows = await prisma.$queryRaw<{ word: string }[]>(Prisma.sql`
-      SELECT word
-      FROM mueller_dictionary
-      WHERE id NOT IN (${Prisma.join(candidateIds)})
-        AND moderated = 1
-      LIMIT 200 OFFSET ${randomOffset2}
-    `);
-
     const translationPool = uniqStrings([
-      ...translationPoolRows.map((row) => parseTranslations(row.translations)[0]).filter(Boolean),
-      ...wordRows.map((row) => parseTranslations(row.translations)[0]).filter(Boolean),
+      ...exerciseRows.map((row) => parseTranslations(row.translations)[0]).filter(Boolean),
     ]);
 
-    const wordPool = uniqStrings([
-      ...wordPoolRows.map((row) => row.word),
-      ...wordRows.map((row) => row.word),
-    ]);
+    const wordPool = uniqStrings([...exerciseRows.map((row) => row.word)]);
 
     const maxExercises = Math.min(
       MAX_EXERCISE_LIMIT,
       exerciseLimit && exerciseLimit > 0 ? exerciseLimit : candidateIds.length * 2,
     );
 
-    const exerciseKeys = new Set<string>();
     const exercises: Exercise[] = [];
 
-    for (const row of wordRows) {
+    for (const row of exerciseRows) {
       if (exercises.length >= maxExercises) break;
 
       const translations = parseTranslations(row.translations);
-      if (!translations.length) continue;
+      const correctRu = translations[0] ?? '';
 
-      const correctRu = translations[0];
       const progress = progressByWord.get(row.wordId) ?? {
         status: 'new',
         touchesTotal: 0,
@@ -256,74 +242,46 @@ export const exercisesService = {
         addedToVocab: vocabSet.has(row.wordId),
       };
 
-      // Randomize direction generation:
-      // 75% chance: only one direction (randomly chosen)
-      // 25% chance: both directions
-      const random = Math.random();
-      const generateBoth = random < 0.25; // 25% chance for both
-      const generateEnRu = generateBoth || random >= 0.625; // 25% both + 37.5% only en-ru = 62.5%
-      const generateRuEn = generateBoth || (random >= 0.25 && random < 0.625); // 25% both + 37.5% only ru-en = 62.5%
-
-      if (generateEnRu) {
-        const enRuKey = `${row.wordId}-en-ru`;
-        if (!exerciseKeys.has(enRuKey)) {
-          exerciseKeys.add(enRuKey);
-
-          const enRuOptions = buildOptions(
-            correctRu,
-            translationPool.filter((item) => item !== correctRu),
-          );
-
-          exercises.push({
-            wordId: row.wordId,
-            word: row.word,
-            partOfSpeech: row.partOfSpeech,
-            direction: 'en-ru',
-            prompt: row.word,
-            correctAnswer: correctRu,
-            options: enRuOptions,
-            translations: [correctRu],
-            progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
-          });
-        }
+      let options: string[] = [];
+      try {
+        const parsed = JSON.parse(row.options);
+        if (Array.isArray(parsed)) options = parsed;
+      } catch {
+        options = [];
       }
 
-      if (exercises.length >= maxExercises) break;
-
-      if (generateRuEn) {
-        const ruEnKey = `${row.wordId}-ru-en`;
-        if (!exerciseKeys.has(ruEnKey)) {
-          exerciseKeys.add(ruEnKey);
-
-          const ruEnOptions = buildOptions(
-            row.word,
-            wordPool.filter((item) => item !== row.word),
-          );
-
-          exercises.push({
-            wordId: row.wordId,
-            word: row.word,
-            partOfSpeech: row.partOfSpeech,
-            direction: 'ru-en',
-            prompt: correctRu,
-            correctAnswer: row.word,
-            options: ruEnOptions,
-            translations: [correctRu],
-            progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
-          });
-        }
+      if (options.length !== 3) {
+        options =
+          row.direction === 'en-ru'
+            ? buildOptions(correctRu, translationPool.filter((item) => item !== correctRu))
+            : buildOptions(row.word, wordPool.filter((item) => item !== row.word));
       }
+
+      exercises.push({
+        wordId: row.wordId,
+        word: row.word,
+        partOfSpeech: row.partOfSpeech,
+        direction: row.direction,
+        prompt: row.prompt,
+        correctAnswer: row.correctAnswer,
+        options,
+        translations: translations.slice(0, 1),
+        progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
+      });
     }
 
     const finalExercises = shuffleArray(exercises.slice(0, maxExercises));
-    console.log(`[EXERCISES] ✅ Returning ${finalExercises.length} exercises`);
+    console.log(`[EXERCISES] Returning ${finalExercises.length} exercises`);
     if (finalExercises.length > 0) {
-      console.log(`[EXERCISES] ✅ First 3 exercises:`, finalExercises.slice(0, 3).map(e => ({
-        wordId: e.wordId,
-        word: e.word,
-        direction: e.direction,
-        prompt: e.prompt.substring(0, 30)
-      })));
+      console.log(
+        `[EXERCISES] First 3 exercises:`,
+        finalExercises.slice(0, 3).map((e) => ({
+          wordId: e.wordId,
+          word: e.word,
+          direction: e.direction,
+          prompt: e.prompt.substring(0, 30),
+        })),
+      );
     }
     return finalExercises;
   },
@@ -353,7 +311,6 @@ export const exercisesService = {
         END;
     `);
 
-    // Fetch updated progress - needed to return accurate values after update
     return fetchProgress(userId, wordId);
   },
 
