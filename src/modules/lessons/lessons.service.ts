@@ -1,184 +1,130 @@
-import type {
-  LessonContent,
-  LessonDetailDto,
-  LessonSummaryDto,
-} from "../../shared/types";
-import { prisma } from "../../shared/prisma/prismaClient";
+import { Prisma } from '@prisma/client';
 
-import type {
-  CreateLessonInput,
-  LessonContentBlockInput,
-  LessonContentInput,
-  ListLessonsQuery,
-  UpdateLessonInput,
-} from "./lessons.schemas";
+import { prisma } from '../../shared/prisma/prismaClient';
 
-type LessonRecord = {
-  id: string;
+type DbLessonRow = {
+  id: number;
+  slug: string;
   title: string;
+  topic: string;
   description: string | null;
-  content: unknown;
-  xpReward: number;
-  duration: number | null;
-  createdAt: Date;
-  updatedAt: Date;
+  thumbnail: string | null;
+  duration_sec: number | null;
+  exercises_count: number;
 };
 
-type LessonDelegate = {
-  create: (args: unknown) => Promise<LessonRecord>;
-  findMany: (args: unknown) => Promise<LessonRecord[]>;
-  findUnique: (args: unknown) => Promise<LessonRecord | null>;
-  update: (args: unknown) => Promise<LessonRecord>;
-  delete: (args: unknown) => Promise<LessonRecord>;
+type DbExerciseRow = {
+  id: number;
+  lesson_id: number;
+  phrase: string;
+  hint: string | null;
+  video_content_id: number;
+  video_start_ms: number | null;
+  video_end_ms: number | null;
+  distractors: string | null; // JSON
+  points: number;
+  exercise_order: number;
 };
 
-const getLessonDelegate = (): LessonDelegate => {
-  const delegate = (prisma as unknown as { lesson?: LessonDelegate }).lesson;
-  if (!delegate) {
-    throw Object.assign(new Error("Lesson storage is not configured"), {
-      status: 500,
-    });
-  }
-  return delegate;
-};
-
-const mapContent = (content: LessonRecord["content"]): LessonContent => {
-  if (!content || typeof content !== "object") {
-    return { version: "1.0.0", blocks: [] };
-  }
-
-  return content as LessonContent;
-};
-
-const mapToSummary = (lesson: LessonRecord): LessonSummaryDto => ({
-  id: lesson.id,
-  title: lesson.title,
-  description: lesson.description ?? undefined,
-  xpReward: lesson.xpReward,
-  durationMinutes: lesson.duration ?? null,
-  updatedAt: lesson.updatedAt.toISOString(),
-});
-
-const mapToDetail = (lesson: LessonRecord): LessonDetailDto => ({
-  ...mapToSummary(lesson),
-  content: mapContent(lesson.content),
-  createdAt: lesson.createdAt.toISOString(),
-});
-
-const createLesson = async (
-  input: CreateLessonInput
-): Promise<LessonDetailDto> => {
-  const lessonClient = getLessonDelegate();
-  const lesson = await lessonClient.create({
-    data: {
-      title: input.title,
-      description: input.description ?? null,
-      xpReward: input.xpReward ?? 15,
-      duration: input.durationMinutes ?? null,
-      content: normalizeContent(input.content),
-    },
-  });
-
-  return mapToDetail(lesson);
-};
-
-const listLessons = async (query: ListLessonsQuery) => {
-  const take = query.limit ?? 20;
-  const lessonClient = getLessonDelegate();
-  const lessons = await lessonClient.findMany({
-    where: query.search
-      ? {
-          title: { contains: query.search, mode: "insensitive" },
-        }
-      : undefined,
-    orderBy: { updatedAt: "desc" },
-    take: take + 1,
-    ...(query.cursor
-      ? {
-          skip: 1,
-          cursor: { id: query.cursor },
-        }
-      : {}),
-  });
-
-  const hasMore = lessons.length > take;
-  const items = lessons.slice(0, take).map(mapToSummary);
-
-  return {
-    items,
-    nextCursor: hasMore ? items[items.length - 1]?.id : null,
-  };
-};
-
-const getLessonById = async (id: string) => {
-  const lessonClient = getLessonDelegate();
-  const lesson = await lessonClient.findUnique({ where: { id } });
-  if (!lesson) return null;
-  return mapToDetail(lesson);
-};
-
-const updateLesson = async (
-  id: string,
-  input: UpdateLessonInput
-): Promise<LessonDetailDto> => {
-  const lessonClient = getLessonDelegate();
-
-  const data: Record<string, unknown> = {};
-  if (typeof input.title === "string") data.title = input.title;
-  if (typeof input.description !== "undefined")
-    data.description = input.description ?? null;
-  if (typeof input.xpReward === "number") data.xpReward = input.xpReward;
-  if (typeof input.durationMinutes !== "undefined")
-    data.duration = input.durationMinutes ?? null;
-  if (input.content) data.content = normalizeContent(input.content);
-
-  const lesson = await lessonClient.update({
-    where: { id },
-    data,
-  });
-
-  return mapToDetail(lesson);
-};
-
-const deleteLesson = async (id: string): Promise<void> => {
-  const lessonClient = getLessonDelegate();
-  await lessonClient.delete({ where: { id } });
-};
-
-const normalizeBlock = (
-  block: LessonContentBlockInput,
-  index: number
-): LessonContentBlockInput => {
-  const id = block.id || `${block.type}-${index + 1}`;
-  if (block.type === "quiz") {
-    const options = block.options.length ? block.options : [""];
-    const boundedCorrect = Math.min(
-      Math.max(0, block.correctOption),
-      options.length - 1
-    );
-    return {
-      ...block,
-      id,
-      options,
-      correctOption: boundedCorrect,
-    };
-  }
-  return { ...block, id };
-};
-
-const normalizeContent = (content: LessonContentInput): LessonContentInput => {
-  const version = content.version ?? "1.0.0";
-  return {
-    ...content,
-    version,
-    blocks: content.blocks.map((block, index) => normalizeBlock(block, index)),
-  };
+export type Lesson = DbLessonRow;
+export type LessonExercise = {
+  id: number;
+  phrase: string;
+  hint: string | null;
+  videoContentId: number;
+  videoStartMs: number | null;
+  videoEndMs: number | null;
+  distractors: string[]; // parsed JSON
+  points: number;
+  order: number;
 };
 
 export const lessonsService = {
-  createLesson,
-  listLessons,
-  getLessonById,
-  updateLesson,
-  deleteLesson,
+  async listLessons(limit = 50, offset = 0): Promise<Lesson[]> {
+    const rows = await prisma.$queryRaw<DbLessonRow[]>(Prisma.sql`
+      SELECT
+        l.id,
+        l.slug,
+        l.title,
+        l.topic,
+        l.description,
+        l.thumbnail,
+        l.duration_sec,
+        COUNT(e.id) AS exercises_count
+      FROM lessons l
+      LEFT JOIN lesson_exercises e ON e.lesson_id = l.id
+      GROUP BY l.id, l.slug, l.title, l.topic, l.description, l.thumbnail, l.duration_sec
+      ORDER BY l.id DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `);
+
+    return rows;
+  },
+
+  async getLessonById(id: number): Promise<{ lesson: Lesson | null; exercises: LessonExercise[] }> {
+    const [lessonRow] = await prisma.$queryRaw<DbLessonRow[]>(Prisma.sql`
+      SELECT
+        l.id,
+        l.slug,
+        l.title,
+        l.topic,
+        l.description,
+        l.thumbnail,
+        l.duration_sec,
+        COUNT(e.id) AS exercises_count
+      FROM lessons l
+      LEFT JOIN lesson_exercises e ON e.lesson_id = l.id
+      WHERE l.id = ${id}
+      GROUP BY l.id, l.slug, l.title, l.topic, l.description, l.thumbnail, l.duration_sec
+      LIMIT 1
+    `);
+
+    if (!lessonRow) {
+      return { lesson: null, exercises: [] };
+    }
+
+    const exerciseRows = await prisma.$queryRaw<DbExerciseRow[]>(Prisma.sql`
+      SELECT
+        id,
+        lesson_id,
+        phrase,
+        hint,
+        video_content_id,
+        video_start_ms,
+        video_end_ms,
+        distractors,
+        points,
+        exercise_order
+      FROM lesson_exercises
+      WHERE lesson_id = ${id}
+      ORDER BY exercise_order ASC, id ASC
+    `);
+
+    const exercises: LessonExercise[] = exerciseRows.map((row) => {
+      let distractors: string[] = [];
+      try {
+        if (row.distractors) {
+          const parsed = JSON.parse(row.distractors);
+          if (Array.isArray(parsed)) distractors = parsed.map((v) => String(v));
+        }
+      } catch (err) {
+        console.error('[LESSONS] Failed to parse distractors', err);
+      }
+
+      return {
+        id: row.id,
+        phrase: row.phrase,
+        hint: row.hint,
+        videoContentId: row.video_content_id,
+        videoStartMs: row.video_start_ms,
+        videoEndMs: row.video_end_ms,
+        distractors,
+        points: row.points,
+        order: row.exercise_order,
+      };
+    });
+
+    return { lesson: lessonRow, exercises };
+  },
 };
+

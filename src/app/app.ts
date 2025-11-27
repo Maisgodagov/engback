@@ -10,11 +10,11 @@ import { usersRouter } from '../modules/users/users.router';
 import { dictionaryRouter } from '../modules/dictionary/dictionary.router';
 import { preferencesRouter } from '../modules/preferences/preferences.router';
 import { roadmapRouter } from '../modules/roadmap/roadmap.router';
-import { lessonsRouter } from '../modules/lessons/lessons.router';
 import { adminRouter } from '../modules/admin/admin.router';
 import { videoLearningRouter } from '../modules/video-learning/videoLearning.router';
 import { exercisesRouter } from '../modules/exercises/exercises.router';
 import { muellerRouter } from '../modules/mueller/mueller.router';
+import { lessonsRouter } from '../modules/lessons/lessons.router';
 
 export const createApp = () => {
   const app = express();
@@ -66,6 +66,7 @@ export const createApp = () => {
   app.use('/api/video-learning', videoLearningRouter);
   app.use('/api/exercises', exercisesRouter);
   app.use('/api/mueller', muellerRouter);
+  app.use('/api/lessons', lessonsRouter);
 
   app.use(errorHandler);
 

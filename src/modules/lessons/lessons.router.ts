@@ -1,12 +1,11 @@
 import { Router } from 'express';
 
-import { requireAdmin } from '../../shared/middleware/requireAdmin';
-import { createLesson, deleteLesson, getLesson, listLessons, updateLesson } from './lessons.controller';
+import { lessonsController } from './lessons.controller';
 
-export const lessonsRouter = Router();
+const router = Router();
 
-lessonsRouter.get('/', listLessons);
-lessonsRouter.post('/', requireAdmin, createLesson);
-lessonsRouter.get('/:id', getLesson);
-lessonsRouter.put('/:id', requireAdmin, updateLesson);
-lessonsRouter.delete('/:id', requireAdmin, deleteLesson);
+router.get('/', lessonsController.list);
+router.get('/:id', lessonsController.getById);
+
+export const lessonsRouter = router;
+
