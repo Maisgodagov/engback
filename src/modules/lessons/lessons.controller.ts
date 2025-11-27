@@ -35,5 +35,68 @@ export const lessonsController = {
       res.status(500).json({ message: 'Failed to get lesson' });
     }
   },
-};
 
+  async create(req: Request, res: Response) {
+    try {
+      const { slug, title, topic, description, thumbnail, durationSec, exercises } = req.body;
+      if (!slug || !title || !topic || !Array.isArray(exercises)) {
+        res.status(400).json({ message: 'Invalid payload' });
+        return;
+      }
+
+      const lessonId = await lessonsService.createLesson({
+        slug,
+        title,
+        topic,
+        description,
+        thumbnail,
+        durationSec,
+        exercises,
+      });
+      res.json({ id: lessonId });
+    } catch (error) {
+      console.error('[LESSONS] Error creating lesson', error);
+      res.status(500).json({ message: 'Failed to create lesson' });
+    }
+  },
+
+  async update(req: Request, res: Response) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const { slug, title, topic, description, thumbnail, durationSec, exercises } = req.body;
+      if (!id || !slug || !title || !topic || !Array.isArray(exercises)) {
+        res.status(400).json({ message: 'Invalid payload' });
+        return;
+      }
+
+      await lessonsService.updateLesson(id, {
+        slug,
+        title,
+        topic,
+        description,
+        thumbnail,
+        durationSec,
+        exercises,
+      });
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[LESSONS] Error updating lesson', error);
+      res.status(500).json({ message: 'Failed to update lesson' });
+    }
+  },
+
+  async remove(req: Request, res: Response) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!id) {
+        res.status(400).json({ message: 'Invalid id' });
+        return;
+      }
+      await lessonsService.deleteLesson(id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[LESSONS] Error deleting lesson', error);
+      res.status(500).json({ message: 'Failed to delete lesson' });
+    }
+  },
+};
