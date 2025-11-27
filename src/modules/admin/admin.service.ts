@@ -28,15 +28,17 @@ export const adminService = {
     page: number,
     limit: number,
     moderatedFilter?: string,
+    search?: string,
   ): Promise<{ words: MuellerWord[]; total: number; page: number; totalPages: number }> {
     const offset = (page - 1) * limit;
+    const whereSearch = search ? Prisma.sql`word LIKE ${'%' + search + '%'}` : Prisma.empty;
 
     const countQuery =
       moderatedFilter === 'true'
-        ? Prisma.sql`SELECT COUNT(*) as total FROM mueller_dictionary WHERE moderated = 1`
+        ? Prisma.sql`SELECT COUNT(*) as total FROM mueller_dictionary WHERE moderated = 1 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}`
         : moderatedFilter === 'false'
-          ? Prisma.sql`SELECT COUNT(*) as total FROM mueller_dictionary WHERE moderated = 0`
-          : Prisma.sql`SELECT COUNT(*) as total FROM mueller_dictionary`;
+          ? Prisma.sql`SELECT COUNT(*) as total FROM mueller_dictionary WHERE moderated = 0 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}`
+          : Prisma.sql`SELECT COUNT(*) as total FROM mueller_dictionary ${whereSearch ? Prisma.sql`WHERE ${whereSearch}` : Prisma.empty}`;
 
     const [countResult] = await prisma.$queryRaw<{ total: bigint }[]>(countQuery);
     const total = Number(countResult.total);
@@ -46,7 +48,7 @@ export const adminService = {
         ? Prisma.sql`
       SELECT id, word, part_of_speech, translations, moderated
       FROM mueller_dictionary
-      WHERE moderated = 1
+      WHERE moderated = 1 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}
       ORDER BY id
       LIMIT ${limit} OFFSET ${offset}
     `
@@ -54,13 +56,14 @@ export const adminService = {
           ? Prisma.sql`
       SELECT id, word, part_of_speech, translations, moderated
       FROM mueller_dictionary
-      WHERE moderated = 0
+      WHERE moderated = 0 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}
       ORDER BY id
       LIMIT ${limit} OFFSET ${offset}
     `
           : Prisma.sql`
       SELECT id, word, part_of_speech, translations, moderated
       FROM mueller_dictionary
+      ${whereSearch ? Prisma.sql`WHERE ${whereSearch}` : Prisma.empty}
       ORDER BY id
       LIMIT ${limit} OFFSET ${offset}
     `;
@@ -113,15 +116,17 @@ export const adminService = {
     page: number,
     limit: number,
     moderatedFilter?: string,
+    search?: string,
   ): Promise<{ items: PrecomputedExercise[]; total: number; page: number; totalPages: number }> {
     const offset = (page - 1) * limit;
+    const whereSearch = search ? Prisma.sql`prompt LIKE ${'%' + search + '%'}` : Prisma.empty;
 
     const countQuery =
       moderatedFilter === 'true'
-        ? Prisma.sql`SELECT COUNT(*) as total FROM precomputed_exercises WHERE moderated = 1`
+        ? Prisma.sql`SELECT COUNT(*) as total FROM precomputed_exercises WHERE moderated = 1 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}`
         : moderatedFilter === 'false'
-          ? Prisma.sql`SELECT COUNT(*) as total FROM precomputed_exercises WHERE moderated = 0`
-          : Prisma.sql`SELECT COUNT(*) as total FROM precomputed_exercises`;
+          ? Prisma.sql`SELECT COUNT(*) as total FROM precomputed_exercises WHERE moderated = 0 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}`
+          : Prisma.sql`SELECT COUNT(*) as total FROM precomputed_exercises ${whereSearch ? Prisma.sql`WHERE ${whereSearch}` : Prisma.empty}`;
 
     const [countResult] = await prisma.$queryRaw<{ total: bigint }[]>(countQuery);
     const total = Number(countResult.total);
@@ -131,7 +136,7 @@ export const adminService = {
         ? Prisma.sql`
       SELECT id, word_id, word, part_of_speech, translations, direction, prompt, correct_answer, options, moderated
       FROM precomputed_exercises
-      WHERE moderated = 1
+      WHERE moderated = 1 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}
       ORDER BY id
       LIMIT ${limit} OFFSET ${offset}
     `
@@ -139,13 +144,14 @@ export const adminService = {
           ? Prisma.sql`
       SELECT id, word_id, word, part_of_speech, translations, direction, prompt, correct_answer, options, moderated
       FROM precomputed_exercises
-      WHERE moderated = 0
+      WHERE moderated = 0 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}
       ORDER BY id
       LIMIT ${limit} OFFSET ${offset}
     `
           : Prisma.sql`
       SELECT id, word_id, word, part_of_speech, translations, direction, prompt, correct_answer, options, moderated
       FROM precomputed_exercises
+      ${whereSearch ? Prisma.sql`WHERE ${whereSearch}` : Prisma.empty}
       ORDER BY id
       LIMIT ${limit} OFFSET ${offset}
     `;

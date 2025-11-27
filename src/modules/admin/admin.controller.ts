@@ -8,8 +8,9 @@ export const adminController = {
       const page = parseInt(req.query.page as string) || 1;
       const limit = parseInt(req.query.limit as string) || 50;
       const moderated = req.query.moderated as string | undefined;
+      const search = req.query.search as string | undefined;
 
-      const result = await adminService.getWords(page, limit, moderated);
+      const result = await adminService.getWords(page, limit, moderated, search);
       res.json(result);
     } catch (error) {
       console.error('[ADMIN] Error getting words:', error);
@@ -66,8 +67,9 @@ export const adminController = {
       const page = parseInt(req.query.page as string) || 1;
       const limit = parseInt(req.query.limit as string) || 50;
       const moderated = req.query.moderated as string | undefined;
+      const search = req.query.search as string | undefined;
 
-      const result = await adminService.getPrecomputedExercises(page, limit, moderated);
+      const result = await adminService.getPrecomputedExercises(page, limit, moderated, search);
       res.json(result);
     } catch (error) {
       console.error('[ADMIN] Error getting precomputed exercises:', error);
