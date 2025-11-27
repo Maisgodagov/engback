@@ -31,39 +31,30 @@ export const adminService = {
     search?: string,
   ): Promise<{ words: MuellerWord[]; total: number; page: number; totalPages: number }> {
     const offset = (page - 1) * limit;
-    const whereSearch = search ? Prisma.sql`word LIKE ${'%' + search + '%'}` : Prisma.empty;
+    const conditions: Prisma.Sql[] = [];
+    if (moderatedFilter === 'true') conditions.push(Prisma.sql`moderated = 1`);
+    if (moderatedFilter === 'false') conditions.push(Prisma.sql`moderated = 0`);
+    if (search) conditions.push(Prisma.sql`word LIKE ${'%' + search + '%'}`);
 
-    const countQuery =
-      moderatedFilter === 'true'
-        ? Prisma.sql`SELECT COUNT(*) as total FROM mueller_dictionary WHERE moderated = 1 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}`
-        : moderatedFilter === 'false'
-          ? Prisma.sql`SELECT COUNT(*) as total FROM mueller_dictionary WHERE moderated = 0 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}`
-          : Prisma.sql`SELECT COUNT(*) as total FROM mueller_dictionary ${whereSearch ? Prisma.sql`WHERE ${whereSearch}` : Prisma.empty}`;
+    const combinedWhere = conditions.reduce<Prisma.Sql | null>((acc, cond) => {
+      if (!acc) return cond;
+      return Prisma.sql`${acc} AND ${cond}`;
+    }, null);
+    const whereClause = combinedWhere ? Prisma.sql`WHERE ${combinedWhere}` : Prisma.empty;
 
-    const [countResult] = await prisma.$queryRaw<{ total: bigint }[]>(countQuery);
+    const countSql: any = Prisma.sql`
+      SELECT COUNT(*) as total
+      FROM mueller_dictionary
+      ${whereClause}
+    `;
+
+    const [countResult] = await prisma.$queryRaw<{ total: bigint }[]>(countSql);
     const total = Number(countResult.total);
 
-    const wordsQuery =
-      moderatedFilter === 'true'
-        ? Prisma.sql`
+    const wordsQuery: any = Prisma.sql`
       SELECT id, word, part_of_speech, translations, moderated
       FROM mueller_dictionary
-      WHERE moderated = 1 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}
-      ORDER BY id
-      LIMIT ${limit} OFFSET ${offset}
-    `
-        : moderatedFilter === 'false'
-          ? Prisma.sql`
-      SELECT id, word, part_of_speech, translations, moderated
-      FROM mueller_dictionary
-      WHERE moderated = 0 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}
-      ORDER BY id
-      LIMIT ${limit} OFFSET ${offset}
-    `
-          : Prisma.sql`
-      SELECT id, word, part_of_speech, translations, moderated
-      FROM mueller_dictionary
-      ${whereSearch ? Prisma.sql`WHERE ${whereSearch}` : Prisma.empty}
+      ${whereClause}
       ORDER BY id
       LIMIT ${limit} OFFSET ${offset}
     `;
@@ -119,39 +110,30 @@ export const adminService = {
     search?: string,
   ): Promise<{ items: PrecomputedExercise[]; total: number; page: number; totalPages: number }> {
     const offset = (page - 1) * limit;
-    const whereSearch = search ? Prisma.sql`prompt LIKE ${'%' + search + '%'}` : Prisma.empty;
+    const conditions: Prisma.Sql[] = [];
+    if (moderatedFilter === 'true') conditions.push(Prisma.sql`moderated = 1`);
+    if (moderatedFilter === 'false') conditions.push(Prisma.sql`moderated = 0`);
+    if (search) conditions.push(Prisma.sql`prompt LIKE ${'%' + search + '%'}`);
 
-    const countQuery =
-      moderatedFilter === 'true'
-        ? Prisma.sql`SELECT COUNT(*) as total FROM precomputed_exercises WHERE moderated = 1 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}`
-        : moderatedFilter === 'false'
-          ? Prisma.sql`SELECT COUNT(*) as total FROM precomputed_exercises WHERE moderated = 0 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}`
-          : Prisma.sql`SELECT COUNT(*) as total FROM precomputed_exercises ${whereSearch ? Prisma.sql`WHERE ${whereSearch}` : Prisma.empty}`;
+    const combinedWhere2 = conditions.reduce<Prisma.Sql | null>((acc, cond) => {
+      if (!acc) return cond;
+      return Prisma.sql`${acc} AND ${cond}`;
+    }, null);
+    const whereClause = combinedWhere2 ? Prisma.sql`WHERE ${combinedWhere2}` : Prisma.empty;
 
-    const [countResult] = await prisma.$queryRaw<{ total: bigint }[]>(countQuery);
+    const countSql2: any = Prisma.sql`
+      SELECT COUNT(*) as total
+      FROM precomputed_exercises
+      ${whereClause}
+    `;
+
+    const [countResult] = await prisma.$queryRaw<{ total: bigint }[]>(countSql2);
     const total = Number(countResult.total);
 
-    const itemsQuery =
-      moderatedFilter === 'true'
-        ? Prisma.sql`
+    const itemsQuery: any = Prisma.sql`
       SELECT id, word_id, word, part_of_speech, translations, direction, prompt, correct_answer, options, moderated
       FROM precomputed_exercises
-      WHERE moderated = 1 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}
-      ORDER BY id
-      LIMIT ${limit} OFFSET ${offset}
-    `
-        : moderatedFilter === 'false'
-          ? Prisma.sql`
-      SELECT id, word_id, word, part_of_speech, translations, direction, prompt, correct_answer, options, moderated
-      FROM precomputed_exercises
-      WHERE moderated = 0 ${whereSearch ? Prisma.sql`AND ${whereSearch}` : Prisma.empty}
-      ORDER BY id
-      LIMIT ${limit} OFFSET ${offset}
-    `
-          : Prisma.sql`
-      SELECT id, word_id, word, part_of_speech, translations, direction, prompt, correct_answer, options, moderated
-      FROM precomputed_exercises
-      ${whereSearch ? Prisma.sql`WHERE ${whereSearch}` : Prisma.empty}
+      ${whereClause}
       ORDER BY id
       LIMIT ${limit} OFFSET ${offset}
     `;
