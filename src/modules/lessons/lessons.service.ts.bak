@@ -64,14 +64,11 @@ export const lessonsService = {
       LIMIT ${limit} OFFSET ${offset}
     `);
 
-    return rows.map((row) => ({
-      ...row,
-      exercises_count: Number(row.exercises_count),
-    }));
+    return rows;
   },
 
   async getLessonById(id: number): Promise<{ lesson: Lesson | null; exercises: LessonExercise[] }> {
-    const rows = await prisma.$queryRaw<DbLessonRow[]>(Prisma.sql`
+    const [lessonRow] = await prisma.$queryRaw<DbLessonRow[]>(Prisma.sql`
       SELECT
         l.id,
         l.slug,
@@ -88,16 +85,9 @@ export const lessonsService = {
       LIMIT 1
     `);
 
-    const [lessonRow] = rows;
-
     if (!lessonRow) {
       return { lesson: null, exercises: [] };
     }
-
-    const lesson = {
-      ...lessonRow,
-      exercises_count: Number(lessonRow.exercises_count),
-    };
 
     const exerciseRows = await prisma.$queryRaw<DbExerciseRow[]>(Prisma.sql`
       SELECT
@@ -155,7 +145,7 @@ export const lessonsService = {
       };
     });
 
-    return { lesson, exercises };
+    return { lesson: lessonRow, exercises };
   },
 
   async createLesson(payload: {
