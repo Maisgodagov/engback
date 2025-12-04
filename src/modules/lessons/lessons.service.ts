@@ -64,10 +64,38 @@ export const lessonsService = {
       LIMIT ${limit} OFFSET ${offset}
     `);
 
-    return rows.map((row) => ({
-      ...row,
-      exercises_count: Number(row.exercises_count),
-    }));
+    console.log('[LESSONS] Raw rows count:', rows.length);
+    if (rows.length > 0) {
+      console.log('[LESSONS] First row sample:', {
+        id: rows[0].id,
+        exercises_count: rows[0].exercises_count,
+        exercises_count_type: typeof rows[0].exercises_count,
+      });
+    }
+
+    const mapped = rows.map((row) => {
+      const result = {
+        id: row.id,
+        slug: row.slug,
+        title: row.title,
+        topic: row.topic,
+        description: row.description,
+        thumbnail: row.thumbnail,
+        duration_sec: row.duration_sec,
+        exercises_count: Number(row.exercises_count),
+      };
+      return result;
+    });
+
+    if (mapped.length > 0) {
+      console.log('[LESSONS] First mapped row:', {
+        id: mapped[0].id,
+        exercises_count: mapped[0].exercises_count,
+        exercises_count_type: typeof mapped[0].exercises_count,
+      });
+    }
+
+    return mapped;
   },
 
   async getLessonById(id: number): Promise<{ lesson: Lesson | null; exercises: LessonExercise[] }> {
