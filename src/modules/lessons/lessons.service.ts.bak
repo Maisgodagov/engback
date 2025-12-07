@@ -64,11 +64,42 @@ export const lessonsService = {
       LIMIT ${limit} OFFSET ${offset}
     `);
 
-    return rows;
+    console.log('[LESSONS] Raw rows count:', rows.length);
+    if (rows.length > 0) {
+      console.log('[LESSONS] First row sample:', {
+        id: rows[0].id,
+        exercises_count: rows[0].exercises_count,
+        exercises_count_type: typeof rows[0].exercises_count,
+      });
+    }
+
+    const mapped = rows.map((row) => {
+      const result = {
+        id: row.id,
+        slug: row.slug,
+        title: row.title,
+        topic: row.topic,
+        description: row.description,
+        thumbnail: row.thumbnail,
+        duration_sec: row.duration_sec,
+        exercises_count: Number(row.exercises_count),
+      };
+      return result;
+    });
+
+    if (mapped.length > 0) {
+      console.log('[LESSONS] First mapped row:', {
+        id: mapped[0].id,
+        exercises_count: mapped[0].exercises_count,
+        exercises_count_type: typeof mapped[0].exercises_count,
+      });
+    }
+
+    return mapped;
   },
 
   async getLessonById(id: number): Promise<{ lesson: Lesson | null; exercises: LessonExercise[] }> {
-    const [lessonRow] = await prisma.$queryRaw<DbLessonRow[]>(Prisma.sql`
+    const rows = await prisma.$queryRaw<DbLessonRow[]>(Prisma.sql`
       SELECT
         l.id,
         l.slug,
@@ -85,9 +116,16 @@ export const lessonsService = {
       LIMIT 1
     `);
 
+    const [lessonRow] = rows;
+
     if (!lessonRow) {
       return { lesson: null, exercises: [] };
     }
+
+    const lesson = {
+      ...lessonRow,
+      exercises_count: Number(lessonRow.exercises_count),
+    };
 
     const exerciseRows = await prisma.$queryRaw<DbExerciseRow[]>(Prisma.sql`
       SELECT
@@ -145,7 +183,7 @@ export const lessonsService = {
       };
     });
 
-    return { lesson: lessonRow, exercises };
+    return { lesson, exercises };
   },
 
   async createLesson(payload: {

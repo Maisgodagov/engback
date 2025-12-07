@@ -27,6 +27,7 @@ type DbExerciseRow = {
   type: string;
   options: string | null; // JSON
   answer: string | null;
+  videoUrl: string | null;
 };
 
 export type Lesson = DbLessonRow;
@@ -36,6 +37,7 @@ export type LessonExercise = {
   phrase: string;
   hint: string | null;
   videoContentId: number;
+  videoUrl: string | null;
   videoStartMs: number | null;
   videoEndMs: number | null;
   distractors: string[]; // parsed JSON
@@ -129,21 +131,23 @@ export const lessonsService = {
 
     const exerciseRows = await prisma.$queryRaw<DbExerciseRow[]>(Prisma.sql`
       SELECT
-        id,
-        lesson_id,
-        phrase,
-        hint,
-        video_content_id,
-        video_start_ms,
-        video_end_ms,
-        distractors,
-        points,
-        exercise_order,
-        type,
-        options,
-        answer
-      FROM lesson_exercises
-      WHERE lesson_id = ${id}
+        e.id,
+        e.lesson_id,
+        e.phrase,
+        e.hint,
+        e.video_content_id,
+        e.video_start_ms,
+        e.video_end_ms,
+        e.distractors,
+        e.points,
+        e.exercise_order,
+        e.type,
+        e.options,
+        e.answer,
+        c.videoUrl
+      FROM lesson_exercises e
+      LEFT JOIN video_learning_content c ON c.id = e.video_content_id
+      WHERE e.lesson_id = ${id}
       ORDER BY exercise_order ASC, id ASC
     `);
 
@@ -173,6 +177,7 @@ export const lessonsService = {
         phrase: row.phrase,
         hint: row.hint,
         videoContentId: row.video_content_id,
+        videoUrl: row.videoUrl,
         videoStartMs: row.video_start_ms,
         videoEndMs: row.video_end_ms,
         distractors,
