@@ -20,18 +20,20 @@ export const createApp = () => {
 
   // CORS should be applied before helmet so headers are not overridden
   // OPTIMIZATION: Simplified CORS - one middleware instead of 3 for better performance
-  const corsOrigins = (process.env.CORS_ORIGIN || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const defaultAllowedOrigins = ['https://app.slothary.ru', 'http://localhost:5173', 'http://localhost:5174'];
+  const corsOrigins = Array.from(
+    new Set(
+      (process.env.CORS_ORIGIN || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .concat(defaultAllowedOrigins),
+    ),
+  );
 
   app.use(
     cors({
-      origin: process.env.NODE_ENV === 'production'
-        ? corsOrigins.length > 0
-          ? corsOrigins
-          : false // Block all in production if no CORS_ORIGIN set
-        : true, // Allow all origins in development
+      origin: process.env.NODE_ENV === 'production' ? corsOrigins : true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'x-user-role'],
       credentials: false,
@@ -41,8 +43,9 @@ export const createApp = () => {
   // Apply helmet after CORS. Relax some policies in dev to avoid interfering with localhost API calls
   app.use(
     helmet({
-      contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false,
-      crossOriginEmbedderPolicy: process.env.NODE_ENV === 'production',
+      contentSecurityPolicy: false, // API-only service, avoid blocking cross-origin fetches
+      crossOriginEmbedderPolicy: false, // allow cross-origin resource loading (needed for CORS)
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
     }),
   );
   // Ensure preflight succeeds for any route
