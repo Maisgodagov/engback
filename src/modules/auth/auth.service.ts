@@ -31,7 +31,8 @@ const parseTelegramInitData = (initData: string) => {
     .map(([key, value]) => `${key}=${value}`)
     .join('\n');
 
-  const secretKey = crypto.createHash('sha256').update(botToken).digest();
+  // Telegram WebApp signature: secret = HMAC_SHA256("WebAppData", botToken)
+  const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
   const signature = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
 
   if (signature !== hash) {
