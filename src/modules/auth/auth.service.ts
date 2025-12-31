@@ -168,7 +168,7 @@ const telegramAuth = async ({ initData }: TelegramLoginInput) => {
       data: {
         email,
         fullName,
-        role: UserRole.student,
+        role: UserRole.Student,
         passwordHash,
         avatarUrl: telegram.photoUrl ?? null,
       },
@@ -197,7 +197,7 @@ export const authService = {
   login,
   register,
   listUsers,
-  logout,
+  logout: async () => Promise.resolve(),
   telegramAuth,
 };
 
