@@ -12,6 +12,11 @@ export const registerSchema = loginSchema
     role: z.nativeEnum(UserRole),
   });
 
+export const telegramLoginSchema = z.object({
+  initData: z.string().min(1),
+});
+
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RegisterInput = z.infer<typeof registerSchema>;
+export type TelegramLoginInput = z.infer<typeof telegramLoginSchema>;
 

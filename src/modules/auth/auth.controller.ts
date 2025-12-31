@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 
 import { authService } from './auth.service';
-import { loginSchema, registerSchema } from './auth.schemas';
+import { loginSchema, registerSchema, telegramLoginSchema } from './auth.schemas';
 
 export const login = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -27,6 +27,16 @@ export const logout = async (_req: Request, res: Response, next: NextFunction) =
   try {
     await authService.logout();
     res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const telegramAuth = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const payload = telegramLoginSchema.parse(req.body);
+    const result = await authService.telegramAuth(payload);
+    res.json(result);
   } catch (error) {
     next(error);
   }

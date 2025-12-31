@@ -1,16 +1,64 @@
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import type { User } from '@prisma/client';
 
 import type { AuthTokens, UserProfileDto } from '../../shared/types';
 import { UserRole } from '../../shared/types';
 
-import type { LoginInput, RegisterInput } from './auth.schemas';
+import type { LoginInput, RegisterInput, TelegramLoginInput } from './auth.schemas';
 import { prisma } from '../../shared/prisma/prismaClient';
 
 const createTokens = (user: UserProfileDto): AuthTokens => ({
   accessToken: `access-${user.id}`,
   refreshToken: `refresh-${user.id}`,
 });
+
+const parseTelegramInitData = (initData: string) => {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) {
+    throw Object.assign(new Error('Missing TELEGRAM_BOT_TOKEN'), { status: 500 });
+  }
+
+  const params = new URLSearchParams(initData);
+  const hash = params.get('hash');
+  if (!hash) {
+    throw Object.assign(new Error('Invalid Telegram data: no hash'), { status: 401 });
+  }
+
+  const dataCheckString = Array.from(params.entries())
+    .filter(([key]) => key !== 'hash')
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
+
+  const secretKey = crypto.createHash('sha256').update(botToken).digest();
+  const signature = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+
+  if (signature !== hash) {
+    throw Object.assign(new Error('Invalid Telegram signature'), { status: 401 });
+  }
+
+  const userRaw = params.get('user');
+  if (!userRaw) {
+    throw Object.assign(new Error('Invalid Telegram data: no user'), { status: 401 });
+  }
+
+  let userData: any;
+  try {
+    userData = JSON.parse(userRaw);
+  } catch {
+    throw Object.assign(new Error('Invalid Telegram user payload'), { status: 401 });
+  }
+
+  return {
+    id: String(userData.id),
+    firstName: userData.first_name as string | undefined,
+    lastName: userData.last_name as string | undefined,
+    username: userData.username as string | undefined,
+    photoUrl: userData.photo_url as string | undefined,
+    languageCode: userData.language_code as string | undefined,
+  };
+};
 
 const ensureXpColumn = async () => {
   const [existsRow] = (await prisma.$queryRawUnsafe<any[]>(
@@ -104,8 +152,45 @@ const listUsers = async (): Promise<UserProfileDto[]> => {
   }));
 };
 
-const logout = async () => {
-  return Promise.resolve();
+const telegramAuth = async ({ initData }: TelegramLoginInput) => {
+  const telegram = parseTelegramInitData(initData);
+  const email = `tg-${telegram.id}@telegram.local`;
+  const fullName =
+    [telegram.firstName, telegram.lastName].filter(Boolean).join(' ').trim() ||
+    telegram.username ||
+    `tg-user-${telegram.id}`;
+
+  let user = await prisma.user.findUnique({ where: { email } });
+
+  if (!user) {
+    const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 10);
+    user = await prisma.user.create({
+      data: {
+        email,
+        fullName,
+        role: UserRole.student,
+        passwordHash,
+        avatarUrl: telegram.photoUrl ?? null,
+      },
+    });
+  } else {
+    const dataToUpdate: Partial<User> = {};
+    if (telegram.photoUrl && user.avatarUrl !== telegram.photoUrl) {
+      dataToUpdate.avatarUrl = telegram.photoUrl;
+    }
+    if (fullName && user.fullName !== fullName) {
+      dataToUpdate.fullName = fullName;
+    }
+    if (Object.keys(dataToUpdate).length > 0) {
+      user = await prisma.user.update({ where: { id: user.id }, data: dataToUpdate });
+    }
+  }
+
+  const profile = await mapToProfile(user);
+  return {
+    tokens: createTokens(profile),
+    profile,
+  };
 };
 
 export const authService = {
@@ -113,5 +198,6 @@ export const authService = {
   register,
   listUsers,
   logout,
+  telegramAuth,
 };
 
