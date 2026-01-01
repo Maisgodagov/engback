@@ -708,8 +708,8 @@ const computeRecommendationScores = async (
     baseWhere.isAdultContent = false;
   }
 
-  // Handle moderation filter
-  const effectiveModerationFilter = isAdmin ? (moderationFilter ?? 'all') : 'moderated';
+  // Handle moderation filter: respect explicit client request even for non-admin (WebApp feed)
+  const effectiveModerationFilter = moderationFilter ?? (isAdmin ? 'all' : 'moderated');
   if (effectiveModerationFilter === 'moderated') {
     baseWhere.isModerated = true;
   } else if (effectiveModerationFilter === 'unmoderated') {
