@@ -181,7 +181,6 @@ export const exercisesService = {
         moderated
       FROM precomputed_exercises
       WHERE word_id IN (${Prisma.join(candidateIds)})
-        AND moderated = 1
     `);
 
     console.log(`[EXERCISES] Found ${exerciseRows.length} precomputed exercises rows`);
