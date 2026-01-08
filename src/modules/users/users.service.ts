@@ -77,14 +77,14 @@ const refreshStreak = async (userId: string): Promise<{ streakDays: number }> =>
   if (!streakRow) {
     next = 1;
   } else {
-    const [diffRow] = (await prisma.$queryRawUnsafe<any[]>(
-      `SELECT DATEDIFF(CURRENT_DATE(), DATE(lastSeenAt)) as days FROM user_streaks WHERE userId = ? LIMIT 1`,
-      userId,
-    )) as Array<{ days: number }>;
-    const days = Number(diffRow?.days ?? 999);
-    if (Number.isNaN(days) || days > 1) {
+    const lastSeenAt = new Date(streakRow.lastSeenAt);
+    const dayKey = (value: Date) =>
+      Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
+    const dayDiff = Math.floor((dayKey(now) - dayKey(lastSeenAt)) / 86400000);
+
+    if (!Number.isFinite(dayDiff) || dayDiff > 1) {
       next = 1;
-    } else if (days === 1) {
+    } else if (dayDiff === 1) {
       next = Math.max(1, current) + 1;
     } else {
       next = Math.max(1, current);
