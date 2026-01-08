@@ -31,6 +31,21 @@ type AdminUserRow = {
   avatarUrl: string | null;
   watchedCount: bigint | number | null;
   likedCount: bigint | number | null;
+  lastSeenAt: Date | null;
+};
+
+let streakTableChecked = false;
+
+const ensureStreakTable = async () => {
+  if (streakTableChecked) return;
+  await prisma.$executeRawUnsafe(
+    `CREATE TABLE IF NOT EXISTS user_streaks (
+      userId VARCHAR(191) PRIMARY KEY,
+      lastSeenAt DATETIME(3) NOT NULL,
+      updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+    )`,
+  );
+  streakTableChecked = true;
 };
 
 export const adminService = {
@@ -55,6 +70,8 @@ export const adminService = {
     const safePage = Math.max(page, 1);
     const offset = (safePage - 1) * safeLimit;
 
+    await ensureStreakTable();
+
     const [countResult] = await prisma.$queryRaw<{ total: bigint }[]>(Prisma.sql`
       SELECT COUNT(*) as total
       FROM users
@@ -69,8 +86,10 @@ export const adminService = {
         u.role,
         u.avatarUrl,
         COALESCE(vlp.watchedCount, 0) as watchedCount,
-        COALESCE(vl.likedCount, 0) as likedCount
+        COALESCE(vl.likedCount, 0) as likedCount,
+        us.lastSeenAt as lastSeenAt
       FROM users u
+      LEFT JOIN user_streaks us ON us.userId = u.id
       LEFT JOIN (
         SELECT user_id, COUNT(*) as watchedCount
         FROM video_learning_progress
@@ -95,6 +114,7 @@ export const adminService = {
         avatarUrl: row.avatarUrl ?? undefined,
         watchedCount: Number(row.watchedCount ?? 0),
         likedCount: Number(row.likedCount ?? 0),
+        lastSeenAt: row.lastSeenAt ? row.lastSeenAt.toISOString() : null,
       })),
       total,
       page: safePage,
