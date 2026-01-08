@@ -1267,6 +1267,7 @@ type SnippetContentRecord = {
   durationSeconds: number | null;
   audioLevel: number | null;
   transcriptTranslationChunks: unknown;
+  author: string | null;
 };
 
 let transcriptTokenBackfillPromise: Promise<void> | null = null;
@@ -1546,6 +1547,7 @@ const loadSnippetContent = async (
       durationSeconds: true,
       audioLevel: true,
       transcriptTranslationChunks: true,
+      author: true,
     },
   });
   if (!record) {
@@ -1669,6 +1671,7 @@ const runTokenSearch = async (
   const processedContentIds = new Set<number>();
   const ensuredContents = new Set<number>();
   const metadataCache = new Map<number, SnippetContentRecord>();
+  const authorByContentId = new Map<number, string | null>();
 
   let candidateCursor: TokenCandidateRow | null = null;
   let batchCount = 0;
@@ -1702,6 +1705,12 @@ const runTokenSearch = async (
         continue;
       }
 
+      const metadata = await loadSnippetContent(match.contentId, metadataCache);
+      if (!metadata) {
+        continue;
+      }
+      authorByContentId.set(match.contentId, metadata.author ?? null);
+
       const snippet = await buildSnippetFromMatch(
         match,
         { phrase: trimmedPhrase, snippetPadding },
@@ -1723,7 +1732,43 @@ const runTokenSearch = async (
     }
   }
 
-  return snippets;
+  if (snippets.length <= 1) {
+    return snippets;
+  }
+
+  const normalizeAuthorKey = (value?: string | null) => {
+    const trimmed = (value ?? '').trim().toLowerCase();
+    return trimmed.length ? trimmed : '__unknown__';
+  };
+
+  const buckets = new Map<string, PhraseSnippet[]>();
+  snippets.forEach((snippet) => {
+    const contentId = Number(snippet.contentId);
+    const author = Number.isFinite(contentId) ? authorByContentId.get(contentId) : null;
+    const key = normalizeAuthorKey(author);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(snippet);
+  });
+
+  const grouped = Array.from(buckets.values());
+  if (grouped.length <= 1) {
+    return snippets;
+  }
+
+  const mixed: PhraseSnippet[] = [];
+  let added = true;
+  while (added) {
+    added = false;
+    for (const group of grouped) {
+      const next = group.shift();
+      if (next) {
+        mixed.push(next);
+        added = true;
+      }
+    }
+  }
+
+  return mixed;
 };
 
 const searchPhrase = async (
