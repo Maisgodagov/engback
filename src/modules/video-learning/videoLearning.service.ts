@@ -93,6 +93,25 @@ const normalizeToken = (value: string): string =>
     .replace(/['’,]/g, '')
     .replace(/[^a-z0-9.]+/g, '');
 
+
+const normalizeSnippetAuthorKey = (value?: string | null): string => {
+  const trimmed = (value ?? '').trim().toLowerCase();
+  if (!trimmed) return '__unknown__';
+  const withoutUrl = trimmed.replace(/^https?:\/\/(www\.)?tiktok\.com\/\@/i, '');
+  const withoutAt = withoutUrl.startsWith('@') ? withoutUrl.slice(1) : withoutUrl;
+  const cleaned = withoutAt.replace(/[^a-z0-9._-]+/g, '');
+  return cleaned || '__unknown__';
+};
+
+const shuffleArray = <T>(array: T[]): T[] => {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+};
+
 const formatChunksText = (chunks: TranscriptWordChunk[]): string => {
   if (!chunks.length) return '';
   const joined = chunks.map((chunk) => chunk.text).join(' ').replace(/\s+([.,!?;:])/g, '$1');
@@ -1385,6 +1404,71 @@ const fetchCandidateIdsByFulltext = async (
   return rows.map((row) => row.id);
 };
 
+
+const diversifyCandidateIdsByAuthor = async (
+  candidateIds: number[],
+  maxPerAuthor: number,
+): Promise<number[]> => {
+  if (!candidateIds.length) return [];
+  const rows = await prisma.$queryRaw<Array<{ id: number; author: string | null }>>`
+    SELECT id, author
+    FROM video_learning_content
+    WHERE id IN (${Prisma.join(candidateIds)})
+  `;
+  const authorMap = new Map(rows.map((row) => [row.id, row.author]));
+  const shuffled = shuffleArray(candidateIds);
+  const counts = new Map<string, number>();
+  const result: number[] = [];
+  for (const id of shuffled) {
+    const author = authorMap.get(id) ?? null;
+    const key = normalizeSnippetAuthorKey(author);
+    const current = counts.get(key) ?? 0;
+    if (current >= maxPerAuthor) {
+      continue;
+    }
+    counts.set(key, current + 1);
+    result.push(id);
+  }
+  return result;
+};
+
+
+const enforceSnippetAuthorLimit = async (
+  snippets: PhraseSnippet[],
+  maxPerAuthor: number,
+): Promise<PhraseSnippet[]> => {
+  if (snippets.length <= maxPerAuthor) return snippets;
+  const contentIds = Array.from(
+    new Set(
+      snippets
+        .map((snippet) => Number(snippet.contentId))
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ),
+  );
+  if (!contentIds.length) return snippets;
+  const rows = await prisma.$queryRaw<Array<{ id: number; author: string | null }>>`
+    SELECT id, author
+    FROM video_learning_content
+    WHERE id IN (${Prisma.join(contentIds)})
+  `;
+  const authorMap = new Map(rows.map((row) => [row.id, row.author]));
+  const counts = new Map<string, number>();
+  const limited: PhraseSnippet[] = [];
+  for (const snippet of snippets) {
+    const contentId = Number(snippet.contentId);
+    const author = Number.isFinite(contentId) ? authorMap.get(contentId) ?? null : null;
+    const key = normalizeSnippetAuthorKey(author);
+    const current = counts.get(key) ?? 0;
+    if (current >= maxPerAuthor) {
+      continue;
+    }
+    counts.set(key, current + 1);
+    limited.push(snippet);
+  }
+  return limited;
+};
+
+
 const fetchTokenCandidates = async (
   normalizedToken: string,
   batchSize: number,
@@ -1673,10 +1757,6 @@ const runTokenSearch = async (
   const metadataCache = new Map<number, SnippetContentRecord>();
   const authorByContentId = new Map<number, string | null>();
   const authorCounts = new Map<string, number>();
-  const normalizeAuthorKey = (value?: string | null) => {
-    const trimmedValue = (value ?? '').trim().toLowerCase();
-    return trimmedValue.length ? trimmedValue : '__unknown__';
-  };
 
   let candidateCursor: TokenCandidateRow | null = null;
   let batchCount = 0;
@@ -1714,7 +1794,7 @@ const runTokenSearch = async (
       if (!metadata) {
         continue;
       }
-      const authorKey = normalizeAuthorKey(metadata.author ?? null);
+      const authorKey = normalizeSnippetAuthorKey(metadata.author ?? null);
       authorByContentId.set(match.contentId, metadata.author ?? null);
       const currentAuthorCount = authorCounts.get(authorKey) ?? 0;
       if (currentAuthorCount >= 3) {
@@ -1752,7 +1832,7 @@ const runTokenSearch = async (
   snippets.forEach((snippet) => {
     const contentId = Number(snippet.contentId);
     const author = Number.isFinite(contentId) ? authorByContentId.get(contentId) : null;
-    const key = normalizeAuthorKey(author);
+    const key = normalizeSnippetAuthorKey(author);
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key)!.push(snippet);
   });
@@ -1823,7 +1903,14 @@ const searchPhrase = async (
   const candidateIdsByFulltext = searchQuery
     ? await fetchCandidateIdsByFulltext(searchQuery, FULLTEXT_CANDIDATE_LIMIT)
     : [];
-  const allowedContentIds = candidateIdsByFulltext.length > 0 ? candidateIdsByFulltext : null;
+  const diversifiedIds = candidateIdsByFulltext.length > 0
+    ? await diversifyCandidateIdsByAuthor(candidateIdsByFulltext, 3)
+    : [];
+  const allowedContentIds = diversifiedIds.length > 0
+    ? diversifiedIds
+    : candidateIdsByFulltext.length > 0
+    ? candidateIdsByFulltext
+    : null;
 
   let snippets = await runTokenSearch(
     normalizedTokens,
@@ -1846,6 +1933,8 @@ const searchPhrase = async (
     triggerTranscriptTokenBackfill();
     return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
   }
+
+  snippets = await enforceSnippetAuthorLimit(snippets, 3);
 
   return paginateSnippets(trimmed, snippets, pageSize, cursorOffset, snippetCap);
 };
