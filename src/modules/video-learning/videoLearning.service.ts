@@ -1672,6 +1672,11 @@ const runTokenSearch = async (
   const ensuredContents = new Set<number>();
   const metadataCache = new Map<number, SnippetContentRecord>();
   const authorByContentId = new Map<number, string | null>();
+  const authorCounts = new Map<string, number>();
+  const normalizeAuthorKey = (value?: string | null) => {
+    const trimmedValue = (value ?? '').trim().toLowerCase();
+    return trimmedValue.length ? trimmedValue : '__unknown__';
+  };
 
   let candidateCursor: TokenCandidateRow | null = null;
   let batchCount = 0;
@@ -1709,7 +1714,13 @@ const runTokenSearch = async (
       if (!metadata) {
         continue;
       }
+      const authorKey = normalizeAuthorKey(metadata.author ?? null);
       authorByContentId.set(match.contentId, metadata.author ?? null);
+      const currentAuthorCount = authorCounts.get(authorKey) ?? 0;
+      if (currentAuthorCount >= 3) {
+        processedContentIds.add(candidate.contentId);
+        continue;
+      }
 
       const snippet = await buildSnippetFromMatch(
         match,
@@ -1721,6 +1732,7 @@ const runTokenSearch = async (
       }
 
       snippets.push(snippet);
+      authorCounts.set(authorKey, currentAuthorCount + 1);
       processedContentIds.add(candidate.contentId);
       if (snippets.length >= snippetCap) {
         break;
@@ -1735,11 +1747,6 @@ const runTokenSearch = async (
   if (snippets.length <= 1) {
     return snippets;
   }
-
-  const normalizeAuthorKey = (value?: string | null) => {
-    const trimmed = (value ?? '').trim().toLowerCase();
-    return trimmed.length ? trimmed : '__unknown__';
-  };
 
   const buckets = new Map<string, PhraseSnippet[]>();
   snippets.forEach((snippet) => {
@@ -1768,22 +1775,7 @@ const runTokenSearch = async (
     }
   }
 
-  const AUTHOR_LIMIT = 3;
-  const counts = new Map<string, number>();
-  const limited: PhraseSnippet[] = [];
-  for (const snippet of mixed) {
-    const contentId = Number(snippet.contentId);
-    const author = Number.isFinite(contentId) ? authorByContentId.get(contentId) : null;
-    const key = normalizeAuthorKey(author);
-    const current = counts.get(key) ?? 0;
-    if (current >= AUTHOR_LIMIT) {
-      continue;
-    }
-    counts.set(key, current + 1);
-    limited.push(snippet);
-  }
-
-  return limited;
+  return mixed;
 };
 
 const searchPhrase = async (
