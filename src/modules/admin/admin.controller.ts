@@ -3,6 +3,32 @@ import { Request, Response } from 'express';
 import { adminService } from './admin.service';
 
 export const adminController = {
+  async getUsers(req: Request, res: Response) {
+    try {
+      const page = parseInt(req.query.page as string) || 1;
+      const limit = parseInt(req.query.limit as string) || 50;
+
+      const result = await adminService.getUsers(page, limit);
+      res.json(result);
+    } catch (error) {
+      console.error('[ADMIN] Error getting users:', error);
+      res.status(500).json({ error: 'Failed to get users' });
+    }
+  },
+
+  async updateUserRole(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      const { role } = req.body;
+
+      await adminService.updateUserRole(id, role);
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[ADMIN] Error updating user role:', error);
+      res.status(500).json({ error: 'Failed to update user role' });
+    }
+  },
+
   async getWords(req: Request, res: Response) {
     try {
       const page = parseInt(req.query.page as string) || 1;

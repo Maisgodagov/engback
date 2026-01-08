@@ -23,7 +23,99 @@ type PrecomputedExercise = {
   moderated: number;
 };
 
+type AdminUserRow = {
+  id: string;
+  email: string;
+  fullName: string;
+  role: string;
+  avatarUrl: string | null;
+  watchedCount: bigint | number | null;
+  likedCount: bigint | number | null;
+};
+
 export const adminService = {
+  async getUsers(
+    page: number,
+    limit: number,
+  ): Promise<{
+    items: Array<{
+      id: string;
+      email: string;
+      fullName: string;
+      role: string;
+      avatarUrl?: string;
+      watchedCount: number;
+      likedCount: number;
+    }>;
+    total: number;
+    page: number;
+    totalPages: number;
+  }> {
+    const safeLimit = Math.min(Math.max(limit, 1), 100);
+    const safePage = Math.max(page, 1);
+    const offset = (safePage - 1) * safeLimit;
+
+    const [countResult] = await prisma.$queryRaw<{ total: bigint }[]>(Prisma.sql`
+      SELECT COUNT(*) as total
+      FROM users
+    `);
+    const total = Number(countResult?.total ?? 0);
+
+    const items = await prisma.$queryRaw<AdminUserRow[]>(Prisma.sql`
+      SELECT
+        u.id,
+        u.email,
+        u.fullName,
+        u.role,
+        u.avatarUrl,
+        COALESCE(vlp.watchedCount, 0) as watchedCount,
+        COALESCE(vl.likedCount, 0) as likedCount
+      FROM users u
+      LEFT JOIN (
+        SELECT user_id, COUNT(*) as watchedCount
+        FROM video_learning_progress
+        WHERE status IN ('WATCHED', 'COMPLETED')
+        GROUP BY user_id
+      ) vlp ON vlp.user_id = u.id
+      LEFT JOIN (
+        SELECT user_id, COUNT(*) as likedCount
+        FROM video_likes
+        GROUP BY user_id
+      ) vl ON vl.user_id = u.id
+      ORDER BY u.createdAt DESC
+      LIMIT ${safeLimit} OFFSET ${offset}
+    `);
+
+    return {
+      items: items.map((row) => ({
+        id: row.id,
+        email: row.email,
+        fullName: row.fullName,
+        role: row.role,
+        avatarUrl: row.avatarUrl ?? undefined,
+        watchedCount: Number(row.watchedCount ?? 0),
+        likedCount: Number(row.likedCount ?? 0),
+      })),
+      total,
+      page: safePage,
+      totalPages: Math.ceil(total / safeLimit),
+    };
+  },
+
+  async updateUserRole(id: string, role: string): Promise<void> {
+    const normalized = String(role ?? '').toLowerCase();
+    const allowed = new Set(['student', 'teacher', 'admin']);
+    if (!allowed.has(normalized)) {
+      throw new Error('Invalid role');
+    }
+
+    await prisma.user.update({
+      where: { id },
+      data: { role: normalized as any },
+      select: { id: true },
+    });
+  },
+
   async getWords(
     page: number,
     limit: number,
