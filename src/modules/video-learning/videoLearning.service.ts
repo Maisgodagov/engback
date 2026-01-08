@@ -1768,7 +1768,22 @@ const runTokenSearch = async (
     }
   }
 
-  return mixed;
+  const AUTHOR_LIMIT = 3;
+  const counts = new Map<string, number>();
+  const limited: PhraseSnippet[] = [];
+  for (const snippet of mixed) {
+    const contentId = Number(snippet.contentId);
+    const author = Number.isFinite(contentId) ? authorByContentId.get(contentId) : null;
+    const key = normalizeAuthorKey(author);
+    const current = counts.get(key) ?? 0;
+    if (current >= AUTHOR_LIMIT) {
+      continue;
+    }
+    counts.set(key, current + 1);
+    limited.push(snippet);
+  }
+
+  return limited;
 };
 
 const searchPhrase = async (
