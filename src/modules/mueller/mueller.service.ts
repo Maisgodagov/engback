@@ -9,17 +9,23 @@ export interface MuellerLookupResult {
   translations: string[];
 }
 
+type LookupLang = 'en' | 'ru';
+
 export const muellerService = {
   /**
    * Ищет слово в словаре Mueller
    * @param word - слово для поиска (регистронезависимо)
    * @returns массив результатов поиска
    */
-  async lookup(word: string): Promise<MuellerLookupResult[]> {
+  async lookup(word: string, lang: LookupLang = 'en'): Promise<MuellerLookupResult[]> {
     const normalized = word.trim().toLowerCase();
 
     if (!normalized) {
       return [];
+    }
+
+    if (lang === 'ru') {
+      return this.lookupByTranslation(normalized);
     }
 
     // Точное совпадение (самый приоритетный)
@@ -80,6 +86,30 @@ export const muellerService = {
     `);
 
     return fulltextMatch.map(row => ({
+      id: row.id,
+      word: row.word,
+      partOfSpeech: row.part_of_speech,
+      translations: row.translations.split('||').filter(Boolean),
+    }));
+  },
+
+  async lookupByTranslation(word: string): Promise<MuellerLookupResult[]> {
+    const normalized = word.trim().toLowerCase();
+    if (!normalized) return [];
+
+    const match = await prisma.$queryRaw<Array<{
+      id: number;
+      word: string;
+      part_of_speech: string | null;
+      translations: string;
+    }>>(Prisma.sql`
+      SELECT id, word, part_of_speech, translations
+      FROM mueller_dictionary
+      WHERE LOWER(translations) LIKE CONCAT('%', ${normalized}, '%')
+      LIMIT 10
+    `);
+
+    return match.map(row => ({
       id: row.id,
       word: row.word,
       partOfSpeech: row.part_of_speech,

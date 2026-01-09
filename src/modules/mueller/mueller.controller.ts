@@ -5,13 +5,15 @@ import { muellerService } from './mueller.service';
 export const muellerController = {
   async lookup(req: Request, res: Response) {
     try {
-      const { word } = req.query;
+      const { word, lang } = req.query;
 
       if (!word || typeof word !== 'string') {
         return res.status(400).json({ error: 'Word parameter is required' });
       }
 
-      const results = await muellerService.lookup(word);
+      const normalizedLang =
+        typeof lang === 'string' && lang.toLowerCase() === 'ru' ? 'ru' : 'en';
+      const results = await muellerService.lookup(word, normalizedLang);
       return res.json(results);
     } catch (error) {
       console.error('Mueller lookup error:', error);
