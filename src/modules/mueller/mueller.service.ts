@@ -106,6 +106,17 @@ export const muellerService = {
       SELECT id, word, part_of_speech, translations
       FROM mueller_dictionary
       WHERE LOWER(translations) LIKE CONCAT('%', ${normalized}, '%')
+      ORDER BY
+        CASE
+          WHEN LOWER(translations) = ${normalized}
+            OR LOWER(translations) LIKE CONCAT(${normalized}, '||%')
+          THEN 0
+          ELSE 1
+        END,
+        NULLIF(
+          LOCATE(CONCAT('||', ${normalized}, '||'), CONCAT('||', LOWER(translations), '||')),
+          0
+        )
       LIMIT 10
     `);
 
