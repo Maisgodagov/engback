@@ -105,7 +105,7 @@ export const muellerService = {
     }>>(Prisma.sql`
       SELECT id, word, part_of_speech, translations
       FROM mueller_dictionary
-      WHERE LOWER(translations) LIKE CONCAT('%', ${normalized}, '%')
+      WHERE CONCAT('||', LOWER(translations), '||') LIKE CONCAT('%||', ${normalized}, '||%')
       ORDER BY
         CASE
           WHEN LOWER(translations) = ${normalized}
