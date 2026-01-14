@@ -340,7 +340,7 @@ const TOKEN_INSERT_BATCH_SIZE = 250;
 const TOKEN_TEXT_LIMIT = 120;
 const TOKEN_CANDIDATE_BATCH_SIZE = 200;
 const MAX_TOKEN_CANDIDATE_BATCHES = 200;
-const FULLTEXT_CANDIDATE_LIMIT = 500;
+const FULLTEXT_CANDIDATE_LIMIT = 2000;
 const RANDOM_CONTENT_POOL_SIZE = 20000;
 const RANDOM_PRIORITY_JITTER = 12;
 const UNWATCHED_POOL_MULTIPLIER = 6;
@@ -1605,7 +1605,7 @@ const fetchCandidateIdsByFulltext = async (
     SELECT id
     FROM video_learning_content
     WHERE MATCH(transcript_full) AGAINST(${searchQuery} IN NATURAL LANGUAGE MODE)
-    ORDER BY processed_at DESC
+    ORDER BY RAND()
     LIMIT ${limit}
   `;
   return rows.map((row) => row.id);
@@ -2039,7 +2039,7 @@ const runTokenSearch = async (
   let candidateCursor: TokenCandidateRow | null = null;
   let batchCount = 0;
 
-  const randomizeCandidates = !effectiveAllowedIds;
+  const randomizeCandidates = true;
   while (
     snippets.length < snippetCap &&
     batchCount < MAX_TOKEN_CANDIDATE_BATCHES
