@@ -1474,24 +1474,30 @@ const fetchTokenCandidates = async (
   batchSize: number,
   lastCandidate?: TokenCandidateRow | null,
   allowedContentIds?: number[] | null,
+  randomize = false,
 ): Promise<TokenCandidateRow[]> => {
   if (!normalizedToken) {
     return [];
   }
-  const cursorClause = lastCandidate
+  const cursorClause = randomize
+    ? Prisma.sql``
+    : lastCandidate
     ? Prisma.sql`AND (content_id < ${lastCandidate.contentId} OR (content_id = ${lastCandidate.contentId} AND position > ${lastCandidate.position}))`
     : Prisma.sql``;
   const allowedClause =
     allowedContentIds && allowedContentIds.length > 0
       ? Prisma.sql`AND content_id IN (${Prisma.join(allowedContentIds)})`
       : Prisma.sql``;
+  const orderClause = randomize
+    ? Prisma.sql`ORDER BY RAND()`
+    : Prisma.sql`ORDER BY content_id DESC, position ASC`;
   return prisma.$queryRaw<TokenCandidateRow[]>`
     SELECT content_id AS contentId, position
     FROM video_transcript_tokens
     WHERE token_normalized = ${normalizedToken}
     ${cursorClause}
     ${allowedClause}
-    ORDER BY content_id DESC, position ASC
+    ${orderClause}
     LIMIT ${batchSize}
   `;
 };
@@ -1761,12 +1767,14 @@ const runTokenSearch = async (
   let candidateCursor: TokenCandidateRow | null = null;
   let batchCount = 0;
 
+  const randomizeCandidates = !allowedContentIds;
   while (snippets.length < snippetCap && batchCount < MAX_TOKEN_CANDIDATE_BATCHES) {
     const candidates = await fetchTokenCandidates(
       anchor.token,
       TOKEN_CANDIDATE_BATCH_SIZE,
       candidateCursor,
       allowedContentIds,
+      randomizeCandidates,
     );
     batchCount += 1;
 
