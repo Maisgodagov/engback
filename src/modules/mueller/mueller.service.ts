@@ -148,13 +148,34 @@ const lookupViaYandex = async (
     return [];
   }
 
+  const normalizedQuery = word.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const cached = await prisma.yandexDictionaryCache.findUnique({
+    where: { query_lang: { query: normalizedQuery, lang } },
+  });
+  if (cached?.response) {
+    return buildYandexEntries(normalizedQuery, lang, cached.response as YandexDictResponse);
+  }
+
   const url = new URL(YANDEX_DICTIONARY_ENDPOINT);
   url.searchParams.set('key', YANDEX_DICTIONARY_API_KEY);
   url.searchParams.set('lang', lang === 'ru' ? 'ru-en' : 'en-ru');
-  url.searchParams.set('text', word);
+  url.searchParams.set('text', normalizedQuery);
 
   const response = await httpGetJson<YandexDictResponse>(url);
-  return buildYandexEntries(word, lang, response);
+  await prisma.yandexDictionaryCache.upsert({
+    where: { query_lang: { query: normalizedQuery, lang } },
+    update: { response: response as Prisma.JsonObject },
+    create: {
+      query: normalizedQuery,
+      lang,
+      response: response as Prisma.JsonObject,
+    },
+  });
+  return buildYandexEntries(normalizedQuery, lang, response);
 };
 
 export const muellerService = {

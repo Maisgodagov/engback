@@ -424,3 +424,16 @@ model MuellerWordIndex {
   @@index([muellerId], map: "idx_mueller_id")
   @@map("mueller_word_index")
 }
+
+model YandexDictionaryCache {
+  id        Int      @id @default(autoincrement())
+  query     String   @db.VarChar(200)
+  lang      String   @db.VarChar(10)
+  response  Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([query, lang], map: "uniq_yandex_query_lang")
+  @@index([query], map: "idx_yandex_query")
+  @@map("yandex_dictionary_cache")
+}
