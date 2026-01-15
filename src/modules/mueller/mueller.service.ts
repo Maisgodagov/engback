@@ -28,7 +28,7 @@ type YandexDictDef = {
   tr?: YandexDictTr[];
 };
 
-type YandexDictResponse = {
+export type YandexDictResponse = {
   def?: YandexDictDef[];
 };
 
@@ -73,7 +73,7 @@ const uniq = (values: string[]) => {
   return result;
 };
 
-const buildYandexEntries = (
+export const buildYandexEntries = (
   input: string,
   lang: LookupLang,
   response: YandexDictResponse,

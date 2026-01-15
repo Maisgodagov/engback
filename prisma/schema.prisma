@@ -37,6 +37,7 @@ model UserWord {
   userId        String
   word          String   @db.VarChar(255)
   translation   String   @db.VarChar(255)
+  yandexCacheId Int?     @map("yandex_cache_id")
   transcription String?  @db.VarChar(255)
   partOfSpeech  String?  @db.VarChar(64)
   audioUrl      String?  @db.VarChar(512)
@@ -45,8 +46,10 @@ model UserWord {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @default(now()) @updatedAt
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  yandexCache   YandexDictionaryCache? @relation(fields: [yandexCacheId], references: [id], onDelete: SetNull)
 
   @@index([userId])
+  @@unique([userId, yandexCacheId], map: "uniq_user_yandex_cache")
   @@map("user_words")
 }
 
@@ -432,6 +435,7 @@ model YandexDictionaryCache {
   response  Json
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  userWords UserWord[]
 
   @@unique([query, lang], map: "uniq_yandex_query_lang")
   @@index([query], map: "idx_yandex_query")
