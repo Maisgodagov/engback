@@ -70,6 +70,8 @@ export const dictionaryService = {
   async create(userId: string, payload: CreateUserWordInput) {
     const query = payload.query.trim().toLowerCase();
     const lang = payload.lang;
+    const wordOverride = payload.word?.trim();
+    const translationOverride = payload.translation?.trim();
 
     if (!query) {
       throw Object.assign(new Error('Query is required'), { status: 400 });
@@ -92,15 +94,17 @@ export const dictionaryService = {
     if (cacheRecord) {
       entries = buildYandexEntries(query, lang, cacheRecord.response as YandexDictResponse);
     }
-    if (!entries.length) {
+    if (!entries.length && !(wordOverride && translationOverride)) {
       throw Object.assign(new Error('Dictionary result not found'), { status: 404 });
     }
 
     const primary = entries[0];
+    const primaryWord = wordOverride ?? primary?.word ?? query;
     const primaryTranslation =
-      lang === 'ru'
+      translationOverride ??
+      (lang === 'ru'
         ? query
-        : primary.translations.find((value) => value.trim().length > 0) ?? '';
+        : primary.translations.find((value) => value.trim().length > 0) ?? '');
 
     const existing = cacheRecord
       ? await prisma.userWord.findFirst({
@@ -108,7 +112,7 @@ export const dictionaryService = {
           include: { yandexCache: true },
         })
       : await prisma.userWord.findFirst({
-          where: { userId, word: primary.word, translation: primaryTranslation },
+          where: { userId, word: primaryWord, translation: primaryTranslation },
           include: { yandexCache: true },
         });
     if (existing) {
@@ -135,7 +139,7 @@ export const dictionaryService = {
     const created = await prisma.userWord.create({
       data: {
         userId,
-        word: primary.word,
+        word: primaryWord,
         translation: primaryTranslation,
         yandexCacheId: cacheRecord?.id ?? null,
         sourceLang: 'en',
