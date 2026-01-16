@@ -78,17 +78,20 @@ export const dictionaryService = {
     let cacheRecord = await prisma.yandexDictionaryCache.findUnique({
       where: { query_lang: { query, lang } },
     });
+    let entries: ReturnType<typeof buildYandexEntries> = [];
     if (!cacheRecord) {
-      await muellerService.lookup(query, lang);
-      cacheRecord = await prisma.yandexDictionaryCache.findUnique({
-        where: { query_lang: { query, lang } },
-      });
+      const lookupEntries = await muellerService.lookup(query, lang);
+      if (lookupEntries.length > 0) {
+        entries = lookupEntries;
+      } else {
+        cacheRecord = await prisma.yandexDictionaryCache.findUnique({
+          where: { query_lang: { query, lang } },
+        });
+      }
     }
-    if (!cacheRecord) {
-      throw Object.assign(new Error('Dictionary cache not found'), { status: 404 });
+    if (cacheRecord) {
+      entries = buildYandexEntries(query, lang, cacheRecord.response as YandexDictResponse);
     }
-
-    const entries = buildYandexEntries(query, lang, cacheRecord.response as YandexDictResponse);
     if (!entries.length) {
       throw Object.assign(new Error('Dictionary result not found'), { status: 404 });
     }
@@ -99,10 +102,15 @@ export const dictionaryService = {
         ? query
         : primary.translations.find((value) => value.trim().length > 0) ?? '';
 
-    const existing = await prisma.userWord.findFirst({
-      where: { userId, yandexCacheId: cacheRecord.id },
-      include: { yandexCache: true },
-    });
+    const existing = cacheRecord
+      ? await prisma.userWord.findFirst({
+          where: { userId, yandexCacheId: cacheRecord.id },
+          include: { yandexCache: true },
+        })
+      : await prisma.userWord.findFirst({
+          where: { userId, word: primary.word, translation: primaryTranslation },
+          include: { yandexCache: true },
+        });
     if (existing) {
       return {
         id: existing.id,
@@ -129,7 +137,7 @@ export const dictionaryService = {
         userId,
         word: primary.word,
         translation: primaryTranslation,
-        yandexCacheId: cacheRecord.id,
+        yandexCacheId: cacheRecord?.id ?? null,
         sourceLang: 'en',
         targetLang: 'ru',
       },
