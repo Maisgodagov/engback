@@ -8,6 +8,7 @@ export interface MuellerLookupResult {
   word: string;
   partOfSpeech: string | null;
   translations: string[];
+  synonyms?: string[];
 }
 
 type LookupLang = 'en' | 'ru';
@@ -72,6 +73,19 @@ const uniq = (values: string[]) => {
     result.push(trimmed);
   });
   return result;
+};
+
+const extractYandexTranslations = (response: YandexDictResponse) => {
+  const translations: string[] = [];
+  (response.def ?? []).forEach((def) => {
+    (def.tr ?? []).forEach((tr) => {
+      if (tr.text) translations.push(tr.text);
+      (tr.syn ?? []).forEach((syn) => {
+        if (syn.text) translations.push(syn.text);
+      });
+    });
+  });
+  return uniq(translations);
 };
 
 export const buildYandexEntries = (
@@ -143,43 +157,44 @@ export const buildYandexEntries = (
 
 const lookupViaYandex = async (
   word: string,
-  lang: LookupLang,
-): Promise<MuellerLookupResult[]> => {
+  cacheLangKey: string,
+  apiLang: string,
+): Promise<YandexDictResponse | null> => {
   if (!YANDEX_DICTIONARY_API_KEY) {
-    return [];
+    return null;
   }
 
   const normalizedQuery = word.trim().toLowerCase();
   if (!normalizedQuery) {
-    return [];
+    return null;
   }
 
   const cached = await prisma.yandexDictionaryCache.findUnique({
-    where: { query_lang: { query: normalizedQuery, lang } },
+    where: { query_lang: { query: normalizedQuery, lang: cacheLangKey } },
   });
   if (cached?.response) {
-    return buildYandexEntries(normalizedQuery, lang, cached.response as YandexDictResponse);
+    return cached.response as YandexDictResponse;
   }
 
   const url = new URL(YANDEX_DICTIONARY_ENDPOINT);
   url.searchParams.set('key', YANDEX_DICTIONARY_API_KEY);
-  url.searchParams.set('lang', lang === 'ru' ? 'ru-en' : 'en-ru');
+  url.searchParams.set('lang', apiLang);
   url.searchParams.set('text', normalizedQuery);
   url.searchParams.set('flags', YANDEX_LOOKUP_FLAGS.toString());
 
   const response = await httpGetJson<YandexDictResponse>(url);
   if (response.def && response.def.length > 0) {
     await prisma.yandexDictionaryCache.upsert({
-      where: { query_lang: { query: normalizedQuery, lang } },
+      where: { query_lang: { query: normalizedQuery, lang: cacheLangKey } },
       update: { response: response as Prisma.JsonObject },
       create: {
         query: normalizedQuery,
-        lang,
+        lang: cacheLangKey,
         response: response as Prisma.JsonObject,
       },
     });
   }
-  return buildYandexEntries(normalizedQuery, lang, response);
+  return response;
 };
 
 export const muellerService = {
@@ -197,9 +212,36 @@ export const muellerService = {
 
     if (YANDEX_DICTIONARY_API_KEY) {
       try {
-        const yandexResults = await lookupViaYandex(normalized, lang);
-        if (yandexResults.length) {
-          return yandexResults;
+        const apiLang = lang === 'ru' ? 'ru-en' : 'en-ru';
+        const yandexResponse = await lookupViaYandex(normalized, lang, apiLang);
+        if (yandexResponse) {
+          const yandexResults = buildYandexEntries(normalized, lang, yandexResponse);
+          if (yandexResults.length) {
+            if (lang === 'en') {
+              const synonymsResponse = await lookupViaYandex(normalized, 'en-en', 'en-en');
+              const synonyms = synonymsResponse
+                ? extractYandexTranslations(synonymsResponse).filter(value => value !== normalized)
+                : [];
+              if (synonyms.length) {
+                yandexResults[0].synonyms = synonyms;
+              }
+            } else {
+              const englishSynonyms = extractYandexTranslations(yandexResponse).filter(
+                value => value !== yandexResults[0].word,
+              );
+              if (englishSynonyms.length) {
+                yandexResults[0].synonyms = englishSynonyms;
+              }
+              const ruResponse = await lookupViaYandex(normalized, 'ru-ru', 'ru-ru');
+              const ruTranslations = ruResponse
+                ? extractYandexTranslations(ruResponse).filter(value => value !== normalized)
+                : [];
+              if (ruTranslations.length) {
+                yandexResults[0].translations = ruTranslations;
+              }
+            }
+            return yandexResults;
+          }
         }
       } catch (error) {
         console.error('Yandex dictionary lookup error:', error);
