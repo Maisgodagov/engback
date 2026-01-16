@@ -35,6 +35,7 @@ export type YandexDictResponse = {
 const YANDEX_DICTIONARY_API_KEY = process.env.YANDEX_DICTIONARY_API_KEY ?? '';
 const YANDEX_DICTIONARY_ENDPOINT =
   'https://dictionary.yandex.net/api/v1/dicservice.json/lookup';
+const YANDEX_LOOKUP_FLAGS = 0x0005;
 
 const httpGetJson = async <T>(url: URL): Promise<T> => {
   return new Promise((resolve, reject) => {
@@ -164,17 +165,20 @@ const lookupViaYandex = async (
   url.searchParams.set('key', YANDEX_DICTIONARY_API_KEY);
   url.searchParams.set('lang', lang === 'ru' ? 'ru-en' : 'en-ru');
   url.searchParams.set('text', normalizedQuery);
+  url.searchParams.set('flags', YANDEX_LOOKUP_FLAGS.toString());
 
   const response = await httpGetJson<YandexDictResponse>(url);
-  await prisma.yandexDictionaryCache.upsert({
-    where: { query_lang: { query: normalizedQuery, lang } },
-    update: { response: response as Prisma.JsonObject },
-    create: {
-      query: normalizedQuery,
-      lang,
-      response: response as Prisma.JsonObject,
-    },
-  });
+  if (response.def && response.def.length > 0) {
+    await prisma.yandexDictionaryCache.upsert({
+      where: { query_lang: { query: normalizedQuery, lang } },
+      update: { response: response as Prisma.JsonObject },
+      create: {
+        query: normalizedQuery,
+        lang,
+        response: response as Prisma.JsonObject,
+      },
+    });
+  }
   return buildYandexEntries(normalizedQuery, lang, response);
 };
 
