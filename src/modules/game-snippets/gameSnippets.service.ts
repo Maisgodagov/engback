@@ -15,6 +15,30 @@ type UpdateGameSnippetInput = {
 };
 
 export const gameSnippetsService = {
+  listActive: async (limit?: number) => {
+    const take = limit && limit > 0 ? Math.min(limit, 100) : 100;
+    const items = await prisma.gameSnippet.findMany({
+      where: { isActive: true },
+      orderBy: { createdAt: 'desc' },
+      take,
+      include: {
+        content: { select: { videoUrl: true, videoName: true } },
+      },
+    });
+    return items.map((item) => ({
+      id: item.id,
+      phrase: item.phrase,
+      contentId: item.contentId,
+      startSeconds: item.startSeconds,
+      endSeconds: item.endSeconds,
+      isActive: item.isActive,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+      videoUrl: item.content.videoUrl ?? null,
+      videoName: item.content.videoName ?? null,
+    }));
+  },
+
   list: async () => {
     const items = await prisma.gameSnippet.findMany({
       orderBy: { createdAt: 'desc' },

@@ -4,6 +4,13 @@ import { createGameSnippetSchema, updateGameSnippetSchema } from './gameSnippets
 import { gameSnippetsService } from './gameSnippets.service';
 
 export const gameSnippetsController = {
+  listActive: async (req: Request, res: Response) => {
+    const rawLimit = req.query.limit ? Number(req.query.limit) : undefined;
+    const limit = Number.isFinite(rawLimit) ? Math.floor(rawLimit as number) : undefined;
+    const items = await gameSnippetsService.listActive(limit);
+    res.json({ items });
+  },
+
   list: async (_req: Request, res: Response) => {
     const items = await gameSnippetsService.list();
     res.json({ items });
