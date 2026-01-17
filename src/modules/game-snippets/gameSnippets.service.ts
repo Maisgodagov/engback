@@ -44,31 +44,52 @@ export const gameSnippetsService = {
     }));
   },
 
-  list: async (filters?: { isApproved?: boolean }) => {
-    const items = await prisma.gameSnippet.findMany({
-      where:
-        filters?.isApproved !== undefined
-          ? { isApproved: filters.isApproved }
-          : undefined,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        content: { select: { videoUrl: true, videoName: true } },
-      },
-    });
-    return items.map((item) => ({
-      id: item.id,
-      phrase: item.phrase,
-      translation: item.translation,
-      contentId: item.contentId,
-      startSeconds: item.startSeconds,
-      endSeconds: item.endSeconds,
-      isActive: item.isActive,
-      isApproved: item.isApproved,
-      createdAt: item.createdAt,
-      updatedAt: item.updatedAt,
-      videoUrl: item.content.videoUrl ?? null,
-      videoName: item.content.videoName ?? null,
-    }));
+  list: async (filters?: {
+    isApproved?: boolean;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const where =
+      filters?.isApproved !== undefined
+        ? { isApproved: filters.isApproved }
+        : undefined;
+    const take =
+      typeof filters?.limit === 'number' && filters.limit > 0
+        ? Math.min(filters.limit, 100)
+        : undefined;
+    const skip =
+      typeof filters?.offset === 'number' && filters.offset > 0
+        ? filters.offset
+        : undefined;
+    const [items, total] = await prisma.$transaction([
+      prisma.gameSnippet.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take,
+        skip,
+        include: {
+          content: { select: { videoUrl: true, videoName: true } },
+        },
+      }),
+      prisma.gameSnippet.count({ where }),
+    ]);
+    return {
+      items: items.map((item) => ({
+        id: item.id,
+        phrase: item.phrase,
+        translation: item.translation,
+        contentId: item.contentId,
+        startSeconds: item.startSeconds,
+        endSeconds: item.endSeconds,
+        isActive: item.isActive,
+        isApproved: item.isApproved,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+        videoUrl: item.content.videoUrl ?? null,
+        videoName: item.content.videoName ?? null,
+      })),
+      total,
+    };
   },
 
   create: async (input: CreateGameSnippetInput) => {

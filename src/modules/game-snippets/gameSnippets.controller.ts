@@ -17,8 +17,16 @@ export const gameSnippetsController = {
       approvedParam === undefined
         ? undefined
         : String(approvedParam).toLowerCase() === 'true';
-    const items = await gameSnippetsService.list({ isApproved: approved });
-    res.json({ items });
+    const rawLimit = req.query.limit ? Number(req.query.limit) : undefined;
+    const rawOffset = req.query.offset ? Number(req.query.offset) : undefined;
+    const limit = Number.isFinite(rawLimit) ? Math.floor(rawLimit as number) : undefined;
+    const offset = Number.isFinite(rawOffset) ? Math.floor(rawOffset as number) : undefined;
+    const result = await gameSnippetsService.list({
+      isApproved: approved,
+      limit,
+      offset,
+    });
+    res.json(result);
   },
 
   create: async (req: Request, res: Response) => {
