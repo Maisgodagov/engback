@@ -75,6 +75,7 @@ const EXERCISE_STOP_WORDS = new Set([
   "hey",
   "this",
   "huh",
+  "Oh",
 ]);
 
 const uniqStrings = (values: string[]): string[] => {
