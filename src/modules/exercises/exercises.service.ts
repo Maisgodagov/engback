@@ -1,18 +1,7 @@
 import { Prisma } from '@prisma/client';
 
 import { prisma } from '../../shared/prisma/prismaClient';
-
-type DbPrecomputedRow = {
-  wordId: number;
-  word: string;
-  partOfSpeech: string | null;
-  translations: string | null;
-  direction: ExerciseDirection;
-  prompt: string;
-  correctAnswer: string;
-  options: string;
-  moderated: number;
-};
+import { buildYandexEntries, type YandexDictResponse } from '../mueller/mueller.service';
 
 type DbProgressRow = {
   word_id: number;
@@ -41,6 +30,7 @@ type Exercise = {
   prompt: string;
   correctAnswer: string;
   options: string[];
+  poolSize: number;
   translations: string[];
   progress: Progress;
 };
@@ -69,16 +59,18 @@ const shuffleArray = <T>(input: T[]): T[] => {
   return arr;
 };
 
-const parseTranslations = (value: string | null): string[] => {
-  if (!value) return [];
-  return value
-    .split('||')
-    .map((item) => {
-      let cleaned = item.trim().replace(/^["']|["']$/g, '');
-      cleaned = cleaned.replace(/^[\(\s]*\d+\)\s*/, '');
-      return cleaned.trim();
-    })
-    .filter(Boolean);
+const parseYandexTranslations = (
+  query: string,
+  response: YandexDictResponse,
+): { word: string; translations: string[]; partOfSpeech: string | null } | null => {
+  const entries = buildYandexEntries(query, 'en', response);
+  if (!entries.length) return null;
+  const entry = entries[0];
+  return {
+    word: entry.word,
+    translations: entry.translations,
+    partOfSpeech: entry.partOfSpeech ?? null,
+  };
 };
 
 const buildOptions = (correct: string, pool: string[], extras: string[] = []): string[] => {
@@ -94,10 +86,10 @@ const buildOptions = (correct: string, pool: string[], extras: string[] = []): s
     if (!normalized || seen.has(normalized)) continue;
     options.push(normalized);
     seen.add(normalized);
-    if (options.length >= 3) break;
+    if (options.length >= 7) break;
   }
 
-  while (options.length < 3) {
+  while (options.length < 7) {
     options.push(correct);
   }
 
@@ -122,6 +114,14 @@ const fetchProgress = async (userId: string, wordId: number): Promise<Progress> 
 };
 
 export const exercisesService = {
+  async getWordIndex() {
+    const rows = await prisma.yandexDictionaryCache.findMany({
+      where: { lang: 'en' },
+      select: { id: true, query: true },
+    });
+    return rows;
+  },
+
   async getExercisesForUser(
     userId: string,
     wordIds: number[],
@@ -168,32 +168,13 @@ export const exercisesService = {
       return [];
     }
 
-    const exerciseRows = await prisma.$queryRaw<DbPrecomputedRow[]>(Prisma.sql`
-      SELECT
-        word_id AS wordId,
-        word,
-        part_of_speech AS partOfSpeech,
-        translations,
-        direction,
-        prompt,
-        correct_answer AS correctAnswer,
-        options,
-        moderated
-      FROM precomputed_exercises
-      WHERE word_id IN (${Prisma.join(candidateIds)})
-        AND moderated = 1
-    `);
+    const cacheRows = await prisma.yandexDictionaryCache.findMany({
+      where: { id: { in: candidateIds }, lang: 'en' },
+      select: { id: true, query: true, response: true },
+    });
 
-    console.log(`[EXERCISES] Found ${exerciseRows.length} precomputed exercises rows`);
-    if (exerciseRows.length > 0) {
-      console.log(
-        `[EXERCISES] First 5 rows:`,
-        exerciseRows.slice(0, 5).map((w) => ({ id: w.wordId, word: w.word, dir: w.direction })),
-      );
-    }
-
-    if (!exerciseRows.length) {
-      console.log(`[EXERCISES] No precomputed exercises for given IDs!`);
+    if (!cacheRows.length) {
+      console.log(`[EXERCISES] No Yandex cache rows for given IDs`);
       return [];
     }
 
@@ -215,11 +196,23 @@ export const exercisesService = {
       progressByWord.set(Number(row.word_id), progress);
     });
 
-    const translationPool = uniqStrings([
-      ...exerciseRows.map((row) => parseTranslations(row.translations)[0]).filter(Boolean),
-    ]);
+    const poolSource = await prisma.yandexDictionaryCache.findMany({
+      where: { lang: 'en' },
+      select: { query: true, response: true },
+      take: 2000,
+    });
 
-    const wordPool = uniqStrings([...exerciseRows.map((row) => row.word)]);
+    const translationPool = uniqStrings(
+      poolSource
+        .map((row) => {
+          const parsed = parseYandexTranslations(
+            row.query,
+            row.response as YandexDictResponse,
+          );
+          return parsed?.translations?.[0] ?? null;
+        })
+        .filter(Boolean) as string[],
+    );
 
     const maxExercises = Math.min(
       MAX_EXERCISE_LIMIT,
@@ -228,61 +221,43 @@ export const exercisesService = {
 
     const exercises: Exercise[] = [];
 
-    for (const row of exerciseRows) {
+    for (const row of cacheRows) {
       if (exercises.length >= maxExercises) break;
+      const parsed = parseYandexTranslations(row.query, row.response as YandexDictResponse);
+      if (!parsed || parsed.translations.length === 0) continue;
 
-      const translations = parseTranslations(row.translations);
-      const correctRu = translations[0] ?? '';
+      const correctRu = parsed.translations[0] ?? '';
+      if (!correctRu) continue;
 
-      const progress = progressByWord.get(row.wordId) ?? {
+      const progress = progressByWord.get(row.id) ?? {
         status: 'new',
         touchesTotal: 0,
         touchesCorrect: 0,
         streak: 0,
-        addedToVocab: vocabSet.has(row.wordId),
+        addedToVocab: vocabSet.has(row.id),
       };
 
-      let options: string[] = [];
-      try {
-        const parsed = JSON.parse(row.options);
-        if (Array.isArray(parsed)) options = parsed;
-      } catch {
-        options = [];
-      }
-
-      if (options.length !== 3) {
-        options =
-          row.direction === 'en-ru'
-            ? buildOptions(correctRu, translationPool.filter((item) => item !== correctRu))
-            : buildOptions(row.word, wordPool.filter((item) => item !== row.word));
-      }
+      const optionPool = buildOptions(
+        correctRu,
+        translationPool.filter((item) => item !== correctRu),
+      );
 
       exercises.push({
-        wordId: row.wordId,
-        word: row.word,
-        partOfSpeech: row.partOfSpeech,
-        direction: row.direction,
-        prompt: row.prompt,
-        correctAnswer: row.correctAnswer,
-        options,
-        translations: translations.slice(0, 1),
-        progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
+        wordId: row.id,
+        word: parsed.word,
+        partOfSpeech: parsed.partOfSpeech,
+        direction: 'en-ru',
+        prompt: parsed.word,
+        correctAnswer: correctRu,
+        options: optionPool,
+        poolSize: optionPool.length,
+        translations: parsed.translations.slice(0, 3),
+        progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.id) },
       });
     }
 
     const finalExercises = shuffleArray(exercises.slice(0, maxExercises));
     console.log(`[EXERCISES] Returning ${finalExercises.length} exercises`);
-    if (finalExercises.length > 0) {
-      console.log(
-        `[EXERCISES] First 3 exercises:`,
-        finalExercises.slice(0, 3).map((e) => ({
-          wordId: e.wordId,
-          word: e.word,
-          direction: e.direction,
-          prompt: e.prompt.substring(0, 30),
-        })),
-      );
-    }
     return finalExercises;
   },
 

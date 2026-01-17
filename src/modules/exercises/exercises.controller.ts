@@ -16,6 +16,16 @@ const getUserId = (req: Request): string | null => {
   return null;
 };
 
+export const getWordIndex = async (_req: Request, res: Response) => {
+  try {
+    const items = await exercisesService.getWordIndex();
+    res.json({ items });
+  } catch (error) {
+    console.error('[CONTROLLER] Failed to get word index', error);
+    res.status(500).json({ message: 'Failed to get word index' });
+  }
+};
+
 export const getExercises = async (req: Request, res: Response) => {
   const userId = getUserId(req);
   console.log(`[CONTROLLER] 📨 getExercises request from userId: ${userId}`);
