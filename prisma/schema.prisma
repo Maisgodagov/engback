@@ -226,6 +226,7 @@ model VideoLearningContent {
   videoTopics                 VideoTopic[]
   likes                       VideoLike[]
   transcriptTokens            VideoTranscriptToken[]
+  gameSnippets                GameSnippet[]
 
   @@index([cefrLevel], map: "idx_cefr_level")
   @@index([processedAt], map: "idx_processed_at")
@@ -304,6 +305,22 @@ model VideoLike {
   @@index([contentId])
   @@index([userId, createdAt], map: "idx_user_likes")
   @@map("video_likes")
+}
+
+model GameSnippet {
+  id           String               @id @default(cuid())
+  phrase       String               @db.VarChar(255)
+  contentId    Int                  @map("content_id")
+  startSeconds Float                @map("start_seconds")
+  endSeconds   Float                @map("end_seconds")
+  isActive     Boolean              @default(true) @map("is_active")
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @default(now()) @updatedAt
+  content      VideoLearningContent @relation(fields: [contentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([contentId])
+  @@index([phrase])
+  @@map("game_snippets")
 }
 
 model VideoTopicPreference {
