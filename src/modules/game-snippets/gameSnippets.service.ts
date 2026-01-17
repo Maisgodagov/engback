@@ -2,6 +2,7 @@ import { prisma } from '../../shared/prisma/prismaClient';
 
 type CreateGameSnippetInput = {
   phrase: string;
+  translation?: string | null;
   contentId: number;
   startSeconds: number;
   endSeconds: number;
@@ -9,6 +10,7 @@ type CreateGameSnippetInput = {
 
 type UpdateGameSnippetInput = {
   phrase?: string;
+  translation?: string | null;
   startSeconds?: number;
   endSeconds?: number;
   isActive?: boolean;
@@ -28,6 +30,7 @@ export const gameSnippetsService = {
     return items.map((item) => ({
       id: item.id,
       phrase: item.phrase,
+      translation: item.translation,
       contentId: item.contentId,
       startSeconds: item.startSeconds,
       endSeconds: item.endSeconds,
@@ -49,6 +52,7 @@ export const gameSnippetsService = {
     return items.map((item) => ({
       id: item.id,
       phrase: item.phrase,
+      translation: item.translation,
       contentId: item.contentId,
       startSeconds: item.startSeconds,
       endSeconds: item.endSeconds,
@@ -64,6 +68,7 @@ export const gameSnippetsService = {
     const item = await prisma.gameSnippet.create({
       data: {
         phrase: input.phrase,
+        translation: input.translation ?? null,
         contentId: input.contentId,
         startSeconds: input.startSeconds,
         endSeconds: input.endSeconds,
@@ -75,6 +80,7 @@ export const gameSnippetsService = {
     return {
       id: item.id,
       phrase: item.phrase,
+      translation: item.translation,
       contentId: item.contentId,
       startSeconds: item.startSeconds,
       endSeconds: item.endSeconds,
@@ -91,6 +97,7 @@ export const gameSnippetsService = {
       where: { id },
       data: {
         phrase: input.phrase,
+        translation: input.translation,
         startSeconds: input.startSeconds,
         endSeconds: input.endSeconds,
         isActive: input.isActive,
@@ -102,6 +109,7 @@ export const gameSnippetsService = {
     return {
       id: item.id,
       phrase: item.phrase,
+      translation: item.translation,
       contentId: item.contentId,
       startSeconds: item.startSeconds,
       endSeconds: item.endSeconds,

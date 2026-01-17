@@ -310,6 +310,7 @@ model VideoLike {
 model GameSnippet {
   id           String               @id @default(cuid())
   phrase       String               @db.VarChar(255)
+  translation  String?              @db.VarChar(255)
   contentId    Int                  @map("content_id")
   startSeconds Float                @map("start_seconds")
   endSeconds   Float                @map("end_seconds")
