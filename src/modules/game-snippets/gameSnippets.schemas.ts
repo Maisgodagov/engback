@@ -14,4 +14,5 @@ export const updateGameSnippetSchema = z.object({
   startSeconds: z.number().nonnegative().optional(),
   endSeconds: z.number().positive().optional(),
   isActive: z.boolean().optional(),
+  isApproved: z.boolean().optional(),
 });

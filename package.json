@@ -12,7 +12,8 @@
     "prisma:migrate": "prisma migrate dev --schema=./prisma/schema.prisma",
     "prisma:studio": "prisma studio --schema=./prisma/schema.prisma",
     "prisma:seed": "ts-node prisma/seed.ts",
-    "backfill:transcripts": "ts-node scripts/backfillTranscriptTokens.ts"
+    "backfill:transcripts": "ts-node scripts/backfillTranscriptTokens.ts",
+    "snippets:generate": "ts-node scripts/generateGameSnippets.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

@@ -11,8 +11,13 @@ export const gameSnippetsController = {
     res.json({ items });
   },
 
-  list: async (_req: Request, res: Response) => {
-    const items = await gameSnippetsService.list();
+  list: async (req: Request, res: Response) => {
+    const approvedParam = req.query.approved;
+    const approved =
+      approvedParam === undefined
+        ? undefined
+        : String(approvedParam).toLowerCase() === 'true';
+    const items = await gameSnippetsService.list({ isApproved: approved });
     res.json({ items });
   },
 
