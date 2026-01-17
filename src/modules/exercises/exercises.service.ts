@@ -1,7 +1,10 @@
-import { Prisma } from '@prisma/client';
+import { Prisma } from "@prisma/client";
 
-import { prisma } from '../../shared/prisma/prismaClient';
-import { buildYandexEntries, type YandexDictResponse } from '../mueller/mueller.service';
+import { prisma } from "../../shared/prisma/prismaClient";
+import {
+  buildYandexEntries,
+  type YandexDictResponse,
+} from "../mueller/mueller.service";
 
 type DbProgressRow = {
   word_id: number;
@@ -20,7 +23,7 @@ type Progress = {
   addedToVocab: boolean;
 };
 
-type ExerciseDirection = 'en-ru' | 'ru-en';
+type ExerciseDirection = "en-ru" | "ru-en";
 
 type Exercise = {
   wordId: number;
@@ -39,38 +42,45 @@ const MAX_WORD_LIMIT = 100;
 const MAX_EXERCISE_LIMIT = 80;
 const TOUCH_GOAL = 5;
 const EXERCISE_STOP_WORDS = new Set([
-  'i',
-  'you',
-  'he',
-  'she',
-  'it',
-  'we',
-  'they',
-  'my',
-  'your',
-  'his',
-  'her',
-  'its',
-  'our',
-  'their',
-  'me',
-  'him',
-  'us',
-  'them',
-  'in',
-  'on',
-  'at',
-  'by',
-  'for',
-  'of',
-  'with',
-  'to',
+  "i",
+  "you",
+  "he",
+  "she",
+  "it",
+  "we",
+  "they",
+  "my",
+  "your",
+  "his",
+  "her",
+  "its",
+  "our",
+  "their",
+  "me",
+  "him",
+  "us",
+  "them",
+  "in",
+  "on",
+  "at",
+  "by",
+  "for",
+  "of",
+  "with",
+  "to",
+  "the",
+  "into",
+  "and",
+  "that",
+  "hey",
+  "this",
+  "huh",
 ]);
 
 const uniqStrings = (values: string[]): string[] => {
   const set = new Set<string>();
   values.forEach((value) => {
-    if (value && typeof value === 'string') {
+    if (value && typeof value === "string") {
       const trimmed = value.trim();
       if (trimmed) set.add(trimmed);
     }
@@ -89,9 +99,13 @@ const shuffleArray = <T>(input: T[]): T[] => {
 
 const parseYandexTranslations = (
   query: string,
-  response: YandexDictResponse,
-): { word: string; translations: string[]; partOfSpeech: string | null } | null => {
-  const entries = buildYandexEntries(query, 'en', response);
+  response: YandexDictResponse
+): {
+  word: string;
+  translations: string[];
+  partOfSpeech: string | null;
+} | null => {
+  const entries = buildYandexEntries(query, "en", response);
   if (!entries.length) return null;
   const entry = entries[0];
   return {
@@ -101,7 +115,11 @@ const parseYandexTranslations = (
   };
 };
 
-const buildOptions = (correct: string, pool: string[], extras: string[] = []): string[] => {
+const buildOptions = (
+  correct: string,
+  pool: string[],
+  extras: string[] = []
+): string[] => {
   const seen = new Set<string>();
   const options: string[] = [];
   const combined = shuffleArray([...extras, ...pool]);
@@ -124,7 +142,10 @@ const buildOptions = (correct: string, pool: string[], extras: string[] = []): s
   return shuffleArray(options);
 };
 
-const fetchProgress = async (userId: string, wordId: number): Promise<Progress> => {
+const fetchProgress = async (
+  userId: string,
+  wordId: number
+): Promise<Progress> => {
   const [row] = await prisma.$queryRaw<DbProgressRow[]>(Prisma.sql`
     SELECT word_id, status, touches_total, touches_correct, streak, added_to_vocab
     FROM user_word_progress
@@ -133,7 +154,7 @@ const fetchProgress = async (userId: string, wordId: number): Promise<Progress> 
   `);
 
   return {
-    status: row?.status ?? 'new',
+    status: row?.status ?? "new",
     touchesTotal: Number(row?.touches_total ?? 0),
     touchesCorrect: Number(row?.touches_correct ?? 0),
     streak: Number(row?.streak ?? 0),
@@ -144,7 +165,7 @@ const fetchProgress = async (userId: string, wordId: number): Promise<Progress> 
 export const exercisesService = {
   async getWordIndex() {
     const rows = await prisma.yandexDictionaryCache.findMany({
-      where: { lang: 'en' },
+      where: { lang: "en" },
       select: { id: true, query: true },
     });
     return rows;
@@ -154,21 +175,25 @@ export const exercisesService = {
     userId: string,
     wordIds: number[],
     wordLimit?: number,
-    exerciseLimit?: number,
+    exerciseLimit?: number
   ): Promise<Exercise[]> {
     console.log(`[EXERCISES] Received request for userId: ${userId}`);
     console.log(`[EXERCISES] Total wordIds: ${wordIds.length}`);
     console.log(`[EXERCISES] First 20 wordIds:`, wordIds.slice(0, 20));
 
-    const uniqueIds = Array.from(new Set(wordIds.map((id) => Number(id)).filter(Number.isInteger)));
+    const uniqueIds = Array.from(
+      new Set(wordIds.map((id) => Number(id)).filter(Number.isInteger))
+    );
     console.log(`[EXERCISES] Unique wordIds: ${uniqueIds.length}`);
 
     const effectiveWordLimit = Math.min(
       MAX_WORD_LIMIT,
-      wordLimit && wordLimit > 0 ? wordLimit : uniqueIds.length,
+      wordLimit && wordLimit > 0 ? wordLimit : uniqueIds.length
     );
     const limitedWordIds = uniqueIds.slice(0, effectiveWordLimit);
-    console.log(`[EXERCISES] Limited to ${limitedWordIds.length} words (limit: ${effectiveWordLimit})`);
+    console.log(
+      `[EXERCISES] Limited to ${limitedWordIds.length} words (limit: ${effectiveWordLimit})`
+    );
 
     if (!limitedWordIds.length) {
       console.log(`[EXERCISES] No valid wordIds, returning empty array`);
@@ -197,21 +222,28 @@ export const exercisesService = {
 
     const excludedIds = new Set(
       progressRows
-        .filter((row) => row.status === 'known' || row.status === 'ignored')
-        .map((row) => Number(row.word_id)),
+        .filter((row) => row.status === "known" || row.status === "ignored")
+        .map((row) => Number(row.word_id))
     );
 
     const candidateIds = limitedWordIds.filter((id) => !excludedIds.has(id));
-    console.log(`[EXERCISES] After filtering known/ignored: ${candidateIds.length} candidates`);
-    console.log(`[EXERCISES] Candidate IDs (first 20):`, candidateIds.slice(0, 20));
+    console.log(
+      `[EXERCISES] After filtering known/ignored: ${candidateIds.length} candidates`
+    );
+    console.log(
+      `[EXERCISES] Candidate IDs (first 20):`,
+      candidateIds.slice(0, 20)
+    );
 
     if (!candidateIds.length) {
-      console.log(`[EXERCISES] No candidate words after filtering, returning empty`);
+      console.log(
+        `[EXERCISES] No candidate words after filtering, returning empty`
+      );
       return [];
     }
 
     const cacheRows = await prisma.yandexDictionaryCache.findMany({
-      where: { id: { in: candidateIds }, lang: 'en' },
+      where: { id: { in: candidateIds }, lang: "en" },
       select: { id: true, query: true, response: true },
     });
 
@@ -229,17 +261,18 @@ export const exercisesService = {
     const progressByWord = new Map<number, Progress>();
     progressRows.forEach((row) => {
       const progress: Progress = {
-        status: row.status ?? 'new',
+        status: row.status ?? "new",
         touchesTotal: Number(row.touches_total ?? 0),
         touchesCorrect: Number(row.touches_correct ?? 0),
         streak: Number(row.streak ?? 0),
-        addedToVocab: Boolean(row.added_to_vocab) || vocabSet.has(Number(row.word_id)),
+        addedToVocab:
+          Boolean(row.added_to_vocab) || vocabSet.has(Number(row.word_id)),
       };
       progressByWord.set(Number(row.word_id), progress);
     });
 
     const poolSource = await prisma.yandexDictionaryCache.findMany({
-      where: { lang: 'en' },
+      where: { lang: "en" },
       select: { query: true, response: true },
       take: 2000,
     });
@@ -249,33 +282,38 @@ export const exercisesService = {
         .map((row) => {
           const parsed = parseYandexTranslations(
             row.query,
-            row.response as YandexDictResponse,
+            row.response as YandexDictResponse
           );
           return parsed?.translations?.[0] ?? null;
         })
-        .filter(Boolean) as string[],
+        .filter(Boolean) as string[]
     );
 
     const maxExercises = Math.min(
       MAX_EXERCISE_LIMIT,
-      exerciseLimit && exerciseLimit > 0 ? exerciseLimit : candidateIds.length * 2,
+      exerciseLimit && exerciseLimit > 0
+        ? exerciseLimit
+        : candidateIds.length * 2
     );
 
     const exercises: Exercise[] = [];
 
     for (const row of cacheRows) {
       if (exercises.length >= maxExercises) break;
-      const parsed = parseYandexTranslations(row.query, row.response as YandexDictResponse);
+      const parsed = parseYandexTranslations(
+        row.query,
+        row.response as YandexDictResponse
+      );
       if (!parsed || parsed.translations.length === 0) continue;
 
       const normalizedWord = parsed.word?.trim().toLowerCase();
       if (!normalizedWord || EXERCISE_STOP_WORDS.has(normalizedWord)) continue;
 
-      const correctRu = parsed.translations[0] ?? '';
+      const correctRu = parsed.translations[0] ?? "";
       if (!correctRu) continue;
 
       const progress = progressByWord.get(row.id) ?? {
-        status: 'new',
+        status: "new",
         touchesTotal: 0,
         touchesCorrect: 0,
         streak: 0,
@@ -284,20 +322,23 @@ export const exercisesService = {
 
       const optionPool = buildOptions(
         correctRu,
-        translationPool.filter((item) => item !== correctRu),
+        translationPool.filter((item) => item !== correctRu)
       );
 
       exercises.push({
         wordId: row.id,
         word: parsed.word,
         partOfSpeech: parsed.partOfSpeech,
-        direction: 'en-ru',
+        direction: "en-ru",
         prompt: parsed.word,
         correctAnswer: correctRu,
         options: optionPool,
         poolSize: optionPool.length,
         translations: parsed.translations.slice(0, 3),
-        progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.id) },
+        progress: {
+          ...progress,
+          addedToVocab: progress.addedToVocab || vocabSet.has(row.id),
+        },
       });
     }
 
@@ -306,7 +347,11 @@ export const exercisesService = {
     return finalExercises;
   },
 
-  async submitAnswer(userId: string, wordId: number, isCorrect: boolean): Promise<Progress> {
+  async submitAnswer(
+    userId: string,
+    wordId: number,
+    isCorrect: boolean
+  ): Promise<Progress> {
     const isCorrectInt = isCorrect ? 1 : 0;
 
     await prisma.$executeRaw(Prisma.sql`
@@ -348,7 +393,11 @@ export const exercisesService = {
     return fetchProgress(userId, wordId);
   },
 
-  async addToVocab(userId: string, wordId: number, note?: string): Promise<Progress> {
+  async addToVocab(
+    userId: string,
+    wordId: number,
+    note?: string
+  ): Promise<Progress> {
     await prisma.$executeRaw(Prisma.sql`
       INSERT INTO user_vocab (user_id, word_id, note)
       VALUES (${userId}, ${wordId}, ${note ?? null})
