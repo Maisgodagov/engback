@@ -38,6 +38,34 @@ type Exercise = {
 const MAX_WORD_LIMIT = 100;
 const MAX_EXERCISE_LIMIT = 80;
 const TOUCH_GOAL = 5;
+const EXERCISE_STOP_WORDS = new Set([
+  'i',
+  'you',
+  'he',
+  'she',
+  'it',
+  'we',
+  'they',
+  'my',
+  'your',
+  'his',
+  'her',
+  'its',
+  'our',
+  'their',
+  'me',
+  'him',
+  'us',
+  'them',
+  'in',
+  'on',
+  'at',
+  'by',
+  'for',
+  'of',
+  'with',
+  'to',
+]);
 
 const uniqStrings = (values: string[]): string[] => {
   const set = new Set<string>();
@@ -239,6 +267,9 @@ export const exercisesService = {
       if (exercises.length >= maxExercises) break;
       const parsed = parseYandexTranslations(row.query, row.response as YandexDictResponse);
       if (!parsed || parsed.translations.length === 0) continue;
+
+      const normalizedWord = parsed.word?.trim().toLowerCase();
+      if (!normalizedWord || EXERCISE_STOP_WORDS.has(normalizedWord)) continue;
 
       const correctRu = parsed.translations[0] ?? '';
       if (!correctRu) continue;
