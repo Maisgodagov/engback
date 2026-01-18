@@ -76,6 +76,15 @@ const EXERCISE_STOP_WORDS = new Set([
   "this",
   "huh",
   "Oh",
+  "yeah",
+  "about",
+  "be",
+  "would",
+  "were",
+  "been",
+  "have",
+  "going",
+  "oh",
 ]);
 
 const uniqStrings = (values: string[]): string[] => {
@@ -100,7 +109,7 @@ const shuffleArray = <T>(input: T[]): T[] => {
 
 const parseYandexTranslations = (
   query: string,
-  response: YandexDictResponse
+  response: YandexDictResponse,
 ): {
   word: string;
   translations: string[];
@@ -119,7 +128,7 @@ const parseYandexTranslations = (
 const buildOptions = (
   correct: string,
   pool: string[],
-  extras: string[] = []
+  extras: string[] = [],
 ): string[] => {
   const seen = new Set<string>();
   const options: string[] = [];
@@ -145,7 +154,7 @@ const buildOptions = (
 
 const fetchProgress = async (
   userId: string,
-  wordId: number
+  wordId: number,
 ): Promise<Progress> => {
   const [row] = await prisma.$queryRaw<DbProgressRow[]>(Prisma.sql`
     SELECT word_id, status, touches_total, touches_correct, streak, added_to_vocab
@@ -176,24 +185,24 @@ export const exercisesService = {
     userId: string,
     wordIds: number[],
     wordLimit?: number,
-    exerciseLimit?: number
+    exerciseLimit?: number,
   ): Promise<Exercise[]> {
     console.log(`[EXERCISES] Received request for userId: ${userId}`);
     console.log(`[EXERCISES] Total wordIds: ${wordIds.length}`);
     console.log(`[EXERCISES] First 20 wordIds:`, wordIds.slice(0, 20));
 
     const uniqueIds = Array.from(
-      new Set(wordIds.map((id) => Number(id)).filter(Number.isInteger))
+      new Set(wordIds.map((id) => Number(id)).filter(Number.isInteger)),
     );
     console.log(`[EXERCISES] Unique wordIds: ${uniqueIds.length}`);
 
     const effectiveWordLimit = Math.min(
       MAX_WORD_LIMIT,
-      wordLimit && wordLimit > 0 ? wordLimit : uniqueIds.length
+      wordLimit && wordLimit > 0 ? wordLimit : uniqueIds.length,
     );
     const limitedWordIds = uniqueIds.slice(0, effectiveWordLimit);
     console.log(
-      `[EXERCISES] Limited to ${limitedWordIds.length} words (limit: ${effectiveWordLimit})`
+      `[EXERCISES] Limited to ${limitedWordIds.length} words (limit: ${effectiveWordLimit})`,
     );
 
     if (!limitedWordIds.length) {
@@ -224,21 +233,21 @@ export const exercisesService = {
     const excludedIds = new Set(
       progressRows
         .filter((row) => row.status === "known" || row.status === "ignored")
-        .map((row) => Number(row.word_id))
+        .map((row) => Number(row.word_id)),
     );
 
     const candidateIds = limitedWordIds.filter((id) => !excludedIds.has(id));
     console.log(
-      `[EXERCISES] After filtering known/ignored: ${candidateIds.length} candidates`
+      `[EXERCISES] After filtering known/ignored: ${candidateIds.length} candidates`,
     );
     console.log(
       `[EXERCISES] Candidate IDs (first 20):`,
-      candidateIds.slice(0, 20)
+      candidateIds.slice(0, 20),
     );
 
     if (!candidateIds.length) {
       console.log(
-        `[EXERCISES] No candidate words after filtering, returning empty`
+        `[EXERCISES] No candidate words after filtering, returning empty`,
       );
       return [];
     }
@@ -283,18 +292,18 @@ export const exercisesService = {
         .map((row) => {
           const parsed = parseYandexTranslations(
             row.query,
-            row.response as YandexDictResponse
+            row.response as YandexDictResponse,
           );
           return parsed?.translations?.[0] ?? null;
         })
-        .filter(Boolean) as string[]
+        .filter(Boolean) as string[],
     );
 
     const maxExercises = Math.min(
       MAX_EXERCISE_LIMIT,
       exerciseLimit && exerciseLimit > 0
         ? exerciseLimit
-        : candidateIds.length * 2
+        : candidateIds.length * 2,
     );
 
     const exercises: Exercise[] = [];
@@ -303,7 +312,7 @@ export const exercisesService = {
       if (exercises.length >= maxExercises) break;
       const parsed = parseYandexTranslations(
         row.query,
-        row.response as YandexDictResponse
+        row.response as YandexDictResponse,
       );
       if (!parsed || parsed.translations.length === 0) continue;
 
@@ -323,7 +332,7 @@ export const exercisesService = {
 
       const optionPool = buildOptions(
         correctRu,
-        translationPool.filter((item) => item !== correctRu)
+        translationPool.filter((item) => item !== correctRu),
       );
 
       exercises.push({
@@ -351,7 +360,7 @@ export const exercisesService = {
   async submitAnswer(
     userId: string,
     wordId: number,
-    isCorrect: boolean
+    isCorrect: boolean,
   ): Promise<Progress> {
     const isCorrectInt = isCorrect ? 1 : 0;
 
@@ -397,7 +406,7 @@ export const exercisesService = {
   async addToVocab(
     userId: string,
     wordId: number,
-    note?: string
+    note?: string,
   ): Promise<Progress> {
     await prisma.$executeRaw(Prisma.sql`
       INSERT INTO user_vocab (user_id, word_id, note)

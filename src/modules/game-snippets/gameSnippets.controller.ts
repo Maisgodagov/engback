@@ -54,6 +54,16 @@ export const gameSnippetsController = {
     res.json(item);
   },
 
+  getById: async (req: Request, res: Response) => {
+    const id = req.params.id;
+    const item = await gameSnippetsService.getById(id);
+    if (!item) {
+      res.status(404).json({ message: 'Snippet not found' });
+      return;
+    }
+    res.json(item);
+  },
+
   remove: async (req: Request, res: Response) => {
     const id = req.params.id;
     await gameSnippetsService.remove(id);

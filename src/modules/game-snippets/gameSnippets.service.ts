@@ -18,6 +18,29 @@ type UpdateGameSnippetInput = {
 };
 
 export const gameSnippetsService = {
+  getById: async (id: string) => {
+    const item = await prisma.gameSnippet.findUnique({
+      where: { id },
+      include: {
+        content: { select: { videoUrl: true, videoName: true } },
+      },
+    });
+    if (!item) return null;
+    return {
+      id: item.id,
+      phrase: item.phrase,
+      translation: item.translation,
+      contentId: item.contentId,
+      startSeconds: item.startSeconds,
+      endSeconds: item.endSeconds,
+      isActive: item.isActive,
+      isApproved: item.isApproved,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+      videoUrl: item.content.videoUrl ?? null,
+      videoName: item.content.videoName ?? null,
+    };
+  },
   listActive: async (limit?: number) => {
     const take = limit && limit > 0 ? Math.min(limit, 100) : 100;
     const items = await prisma.gameSnippet.findMany({

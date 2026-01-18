@@ -6,6 +6,7 @@ import { gameSnippetsController } from './gameSnippets.controller';
 const router = Router();
 
 router.get('/', requireAdmin, gameSnippetsController.list);
+router.get('/:id', requireAdmin, gameSnippetsController.getById);
 router.post('/', requireAdmin, gameSnippetsController.create);
 router.patch('/:id', requireAdmin, gameSnippetsController.update);
 router.delete('/:id', requireAdmin, gameSnippetsController.remove);
