@@ -70,9 +70,13 @@ export const getStatsWords = async (req: Request, res: Response) => {
     res.status(400).json({ message: 'Unknown status' });
     return;
   }
+  const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+  const offset = req.query.offset ? parseInt(req.query.offset as string, 10) : undefined;
   const items = await dictionaryService.getStatsWords(
     userId,
     status as 'learning' | 'known' | 'viewed',
+    limit,
+    offset,
   );
   res.json({ items });
 };

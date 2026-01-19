@@ -237,12 +237,20 @@ export const dictionaryService = {
     return { learningCount, knownCount, viewedCount };
   },
 
-  async getStatsWords(userId: string, status: 'learning' | 'known' | 'viewed') {
+  async getStatsWords(
+    userId: string,
+    status: 'learning' | 'known' | 'viewed',
+    limit = 50,
+    offset = 0,
+  ) {
+    const take = Math.max(1, Math.min(limit, 200));
+    const skip = Math.max(0, offset);
     if (status === 'viewed') {
       const views = await prisma.userDictionaryView.findMany({
         where: { userId },
         orderBy: { updatedAt: 'desc' },
-        take: 200,
+        take,
+        skip,
       });
       return views.map((view) => ({
         id: view.id,
@@ -272,7 +280,7 @@ export const dictionaryService = {
       INNER JOIN yandex_dictionary_cache ydc ON ydc.id = uwp.word_id
       WHERE uwp.user_id = ${userId} AND uwp.status = ${status}
       ORDER BY uwp.updated_at DESC
-      LIMIT 200
+      LIMIT ${take} OFFSET ${skip}
     `);
 
     return progressRows

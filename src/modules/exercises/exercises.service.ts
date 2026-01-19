@@ -40,7 +40,7 @@ type Exercise = {
 
 const MAX_WORD_LIMIT = 100;
 const MAX_EXERCISE_LIMIT = 80;
-const TOUCH_GOAL = 5;
+const TOUCH_GOAL = 3;
 const EXERCISE_STOP_WORDS = new Set([
   "i",
   "you",
