@@ -1,6 +1,10 @@
 import type { Request, Response } from 'express';
 
-import { createUserWordSchema, deleteUserWordSchema } from './dictionary.schemas';
+import {
+  createUserWordSchema,
+  deleteUserWordSchema,
+  recordDictionaryViewSchema,
+} from './dictionary.schemas';
 import { dictionaryService } from './dictionary.service';
 
 const getUserId = (req: Request): string | null => {
@@ -43,6 +47,45 @@ export const list = async (req: Request, res: Response) => {
   }
   console.log('[Dictionary] Sending response...');
   res.json(items);
+};
+
+export const getStats = async (req: Request, res: Response) => {
+  const userId = getUserId(req);
+  if (!userId) {
+    res.status(401).json({ message: 'Missing user identifier' });
+    return;
+  }
+  const stats = await dictionaryService.getStats(userId);
+  res.json(stats);
+};
+
+export const getStatsWords = async (req: Request, res: Response) => {
+  const userId = getUserId(req);
+  if (!userId) {
+    res.status(401).json({ message: 'Missing user identifier' });
+    return;
+  }
+  const status = String(req.query.status ?? '');
+  if (status !== 'learning' && status !== 'known' && status !== 'viewed') {
+    res.status(400).json({ message: 'Unknown status' });
+    return;
+  }
+  const items = await dictionaryService.getStatsWords(
+    userId,
+    status as 'learning' | 'known' | 'viewed',
+  );
+  res.json({ items });
+};
+
+export const recordView = async (req: Request, res: Response) => {
+  const userId = getUserId(req);
+  if (!userId) {
+    res.status(401).json({ message: 'Missing user identifier' });
+    return;
+  }
+  const payload = recordDictionaryViewSchema.parse(req.body);
+  await dictionaryService.recordView(userId, payload);
+  res.status(204).send();
 };
 
 export const create = async (req: Request, res: Response) => {

@@ -25,11 +25,28 @@ model User {
   lessonProgress        UserLessonProgress[]
   moduleProgress        UserModuleProgress[]
   words                 UserWord[]
+  dictionaryViews       UserDictionaryView[]
   videoLearningProgress VideoLearningProgress[]
   videoLikes            VideoLike[]
   videoTopicPreferences VideoTopicPreference[]
 
   @@map("users")
+}
+
+model UserDictionaryView {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  query       String   @db.VarChar(200)
+  word        String   @db.VarChar(255)
+  translation String   @db.VarChar(255)
+  lang        String   @db.VarChar(10)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, query, lang], map: "uniq_user_dictionary_view")
+  @@index([userId], map: "idx_user_dictionary_view_user_id")
+  @@map("user_dictionary_views")
 }
 
 model UserWord {

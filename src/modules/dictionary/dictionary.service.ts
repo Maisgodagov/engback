@@ -1,5 +1,6 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../shared/prisma/prismaClient';
-import type { CreateUserWordInput } from './dictionary.schemas';
+import type { CreateUserWordInput, RecordDictionaryViewInput } from './dictionary.schemas';
 import { buildYandexEntries, muellerService, type YandexDictResponse } from '../mueller/mueller.service';
 
 type DictionaryEntryResponse = {
@@ -32,6 +33,31 @@ const getOtherTranslations = (
   return (match?.translations ?? [])
     .filter((value) => value && value !== primaryTranslation)
     .slice(0, 4);
+};
+
+const getPrimaryTranslation = (
+  cache: { query: string; lang: string; response: unknown } | null,
+): { word: string; translation: string; otherTranslations: string[] } | null => {
+  if (!cache || !cache.response) return null;
+  const lang = cache.lang === 'ru' ? 'ru' : 'en';
+  const entries = buildYandexEntries(cache.query, lang, cache.response as YandexDictResponse);
+  if (!entries.length) return null;
+  const primary = entries[0];
+  if (lang === 'ru') {
+    return {
+      word: primary.word ?? cache.query,
+      translation: cache.query,
+      otherTranslations: entries.map((entry) => entry.word).filter(Boolean).slice(1, 4),
+    };
+  }
+  const translation = primary.translations.find((value) => value.trim().length > 0) ?? '';
+  return {
+    word: primary.word ?? cache.query,
+    translation,
+    otherTranslations: primary.translations
+      .filter((value) => value && value !== translation)
+      .slice(0, 4),
+  };
 };
 
 export const dictionaryService = {
@@ -172,6 +198,98 @@ export const dictionaryService = {
       where: { id, userId },
     });
     return result.count > 0;
+  },
+
+  async recordView(userId: string, payload: RecordDictionaryViewInput) {
+    const query = payload.query.trim().toLowerCase();
+    const word = payload.word.trim();
+    const translation = payload.translation.trim();
+    if (!query || !word || !translation) return;
+    await prisma.userDictionaryView.upsert({
+      where: { userId_query_lang: { userId, query, lang: payload.lang } },
+      update: {
+        word,
+        translation,
+      },
+      create: {
+        userId,
+        query,
+        lang: payload.lang,
+        word,
+        translation,
+      },
+    });
+  },
+
+  async getStats(userId: string) {
+    const rows = await prisma.$queryRaw<Array<{ status: string; total: bigint }>>(
+      Prisma.sql`
+        SELECT status, COUNT(*) AS total
+        FROM user_word_progress
+        WHERE user_id = ${userId} AND status IN ('learning', 'known')
+        GROUP BY status
+      `,
+    );
+    const learningCount =
+      Number(rows.find((row) => row.status === 'learning')?.total ?? 0);
+    const knownCount = Number(rows.find((row) => row.status === 'known')?.total ?? 0);
+    const viewedCount = await prisma.userDictionaryView.count({ where: { userId } });
+    return { learningCount, knownCount, viewedCount };
+  },
+
+  async getStatsWords(userId: string, status: 'learning' | 'known' | 'viewed') {
+    if (status === 'viewed') {
+      const views = await prisma.userDictionaryView.findMany({
+        where: { userId },
+        orderBy: { updatedAt: 'desc' },
+        take: 200,
+      });
+      return views.map((view) => ({
+        id: view.id,
+        query: view.query,
+        lang: view.lang as 'en' | 'ru',
+        word: view.word,
+        translation: view.translation,
+        otherTranslations: [],
+      }));
+    }
+
+    const progressRows = await prisma.$queryRaw<
+      Array<{ id: number; query: string; lang: string; response: unknown }>
+    >(Prisma.sql`
+      SELECT ydc.id, ydc.query, ydc.lang, ydc.response
+      FROM user_word_progress uwp
+      INNER JOIN yandex_dictionary_cache ydc ON ydc.id = uwp.word_id
+      WHERE uwp.user_id = ${userId} AND uwp.status = ${status}
+      ORDER BY uwp.updated_at DESC
+      LIMIT 200
+    `);
+
+    return progressRows
+      .map((row) => {
+        const primary = getPrimaryTranslation({
+          query: row.query,
+          lang: row.lang,
+          response: row.response,
+        });
+        if (!primary || !primary.translation) return null;
+        return {
+          id: String(row.id),
+          query: row.query,
+          lang: (row.lang === 'ru' ? 'ru' : 'en') as 'en' | 'ru',
+          word: primary.word,
+          translation: primary.translation,
+          otherTranslations: primary.otherTranslations,
+        };
+      })
+      .filter(Boolean) as Array<{
+      id: string;
+      query: string;
+      lang: 'en' | 'ru';
+      word: string;
+      translation: string;
+      otherTranslations: string[];
+    }>;
   },
 };
 
