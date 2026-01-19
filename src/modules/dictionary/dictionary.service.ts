@@ -251,13 +251,23 @@ export const dictionaryService = {
         word: view.word,
         translation: view.translation,
         otherTranslations: [],
+        touchesTotal: null,
+        touchesCorrect: null,
+        touchesIncorrect: null,
       }));
     }
 
     const progressRows = await prisma.$queryRaw<
-      Array<{ id: number; query: string; lang: string; response: unknown }>
+      Array<{
+        id: number;
+        query: string;
+        lang: string;
+        response: unknown;
+        touches_total: number | null;
+        touches_correct: number | null;
+      }>
     >(Prisma.sql`
-      SELECT ydc.id, ydc.query, ydc.lang, ydc.response
+      SELECT ydc.id, ydc.query, ydc.lang, ydc.response, uwp.touches_total, uwp.touches_correct
       FROM user_word_progress uwp
       INNER JOIN yandex_dictionary_cache ydc ON ydc.id = uwp.word_id
       WHERE uwp.user_id = ${userId} AND uwp.status = ${status}
@@ -280,6 +290,12 @@ export const dictionaryService = {
           word: primary.word,
           translation: primary.translation,
           otherTranslations: primary.otherTranslations,
+          touchesTotal: Number(row.touches_total ?? 0),
+          touchesCorrect: Number(row.touches_correct ?? 0),
+          touchesIncorrect: Math.max(
+            0,
+            Number(row.touches_total ?? 0) - Number(row.touches_correct ?? 0),
+          ),
         };
       })
       .filter(Boolean) as Array<{
@@ -289,6 +305,9 @@ export const dictionaryService = {
       word: string;
       translation: string;
       otherTranslations: string[];
+      touchesTotal: number | null;
+      touchesCorrect: number | null;
+      touchesIncorrect: number | null;
     }>;
   },
 };
