@@ -10,6 +10,16 @@ export const gameSnippetsController = {
     const items = await gameSnippetsService.listActive(limit);
     res.json({ items });
   },
+  listGame: async (req: Request, res: Response) => {
+    const rawLimit = req.query.limit ? Number(req.query.limit) : undefined;
+    const rawMinWords = req.query.minWords ? Number(req.query.minWords) : undefined;
+    const limit = Number.isFinite(rawLimit) ? Math.floor(rawLimit as number) : undefined;
+    const minWords = Number.isFinite(rawMinWords)
+      ? Math.max(1, Math.floor(rawMinWords as number))
+      : undefined;
+    const items = await gameSnippetsService.listActiveGame({ limit, minWords });
+    res.json({ items });
+  },
 
   list: async (req: Request, res: Response) => {
     const approvedParam = req.query.approved;
