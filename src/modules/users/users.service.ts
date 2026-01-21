@@ -6,6 +6,7 @@ import { prisma } from '../../shared/prisma/prismaClient';
 // OPTIMIZATION: Cache flags to avoid checking schema on every request
 let xpColumnChecked = false;
 let streakTableChecked = false;
+let streakHistoryChecked = false;
 
 const listUsers = async (limit?: number, offset?: number): Promise<UserProfileDto[]> => {
   // OPTIMIZATION: Check xpColumn only once at startup
@@ -49,6 +50,20 @@ const ensureStreakTable = async () => {
   streakTableChecked = true;
 };
 
+const ensureStreakHistoryTable = async () => {
+  if (streakHistoryChecked) return;
+  await prisma.$executeRawUnsafe(
+    `CREATE TABLE IF NOT EXISTS user_streak_history (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      userId VARCHAR(191) NOT NULL,
+      seenDate DATE NOT NULL,
+      createdAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      UNIQUE KEY uniq_user_date (userId, seenDate)
+    )`,
+  );
+  streakHistoryChecked = true;
+};
+
 const ensureXpColumn = async () => {
   if (xpColumnChecked) return;
   const [existsRow] = (await prisma.$queryRawUnsafe<any[]>(
@@ -63,6 +78,7 @@ const ensureXpColumn = async () => {
 
 const refreshStreak = async (userId: string): Promise<{ streakDays: number }> => {
   await ensureStreakTable();
+  await ensureStreakHistoryTable();
   const now = new Date();
 
   const [streakRow] = (await prisma.$queryRawUnsafe<any[]>(
@@ -99,6 +115,13 @@ const refreshStreak = async (userId: string): Promise<{ streakDays: number }> =>
     now,
   );
 
+  await prisma.$executeRawUnsafe(
+    `INSERT IGNORE INTO user_streak_history (userId, seenDate)
+     VALUES (?, DATE(?))`,
+    userId,
+    now,
+  );
+
   await prisma.user.update({ where: { id: userId }, data: { streakDays: next } });
   return { streakDays: next };
 };
@@ -106,6 +129,15 @@ const refreshStreak = async (userId: string): Promise<{ streakDays: number }> =>
 export const usersService = {
   listUsers,
   refreshStreak,
+  getStreakHistory: async (userId: string): Promise<{ dates: string[] }> => {
+    await ensureStreakHistoryTable();
+    const rows = (await prisma.$queryRawUnsafe<any[]>(
+      `SELECT seenDate FROM user_streak_history WHERE userId = ? ORDER BY seenDate DESC`,
+      userId,
+    )) as Array<{ seenDate: Date }>;
+    const dates = rows.map((row) => row.seenDate.toISOString().slice(0, 10));
+    return { dates };
+  },
   addXp: async (userId: string, amount: number): Promise<{ xpPoints: number }> => {
     // OPTIMIZATION: Check only once, not on every addXp call
     if (!xpColumnChecked) {

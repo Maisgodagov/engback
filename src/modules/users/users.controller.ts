@@ -45,3 +45,13 @@ export const addXp = async (req: Request, res: Response) => {
   res.json(result);
 };
 
+export const getStreakHistory = async (req: Request, res: Response) => {
+  const userId = getUserId(req);
+  if (!userId) {
+    res.status(401).json({ message: 'Missing user identifier' });
+    return;
+  }
+  const result = await usersService.getStreakHistory(userId);
+  res.json(result);
+};
+
