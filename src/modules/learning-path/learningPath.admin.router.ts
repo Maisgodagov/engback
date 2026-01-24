@@ -18,3 +18,4 @@ learningPathAdminRouter.patch('/lessons/:id', learningPathController.updateLesso
 learningPathAdminRouter.delete('/lessons/:id', learningPathController.removeLesson);
 
 learningPathAdminRouter.get('/snippets', learningPathController.searchSnippets);
+learningPathAdminRouter.post('/snippets/import', learningPathController.importSnippet);

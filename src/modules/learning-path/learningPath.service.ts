@@ -259,6 +259,40 @@ export const learningPathService = {
     }));
   },
 
+  importSnippet: async (input: {
+    contentId: number;
+    startSeconds: number;
+    endSeconds: number;
+    phrase: string;
+    translation?: string | null;
+  }) => {
+    const existing = await prisma.gameSnippet.findFirst({
+      where: {
+        contentId: input.contentId,
+        startSeconds: input.startSeconds,
+        endSeconds: input.endSeconds,
+        phrase: input.phrase,
+      },
+      include: { content: { select: { videoUrl: true, videoName: true } } },
+    });
+    if (existing) return mapSnippet(existing);
+
+    const created = await prisma.gameSnippet.create({
+      data: {
+        contentId: input.contentId,
+        startSeconds: input.startSeconds,
+        endSeconds: input.endSeconds,
+        phrase: input.phrase,
+        translation: input.translation ?? null,
+        isApproved: true,
+        isActive: true,
+      },
+      include: { content: { select: { videoUrl: true, videoName: true } } },
+    });
+
+    return mapSnippet(created);
+  },
+
   listPathForUser: async (userId?: string | null) => {
     const modules = await prisma.learningPathModule.findMany({
       where: { isActive: true },

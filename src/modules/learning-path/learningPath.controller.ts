@@ -2,11 +2,13 @@ import { type Request, type Response } from 'express';
 import {
   createLearningPathLessonSchema,
   createLearningPathModuleSchema,
+  importLearningPathSnippetSchema,
   lessonProgressStepSchema,
   updateLearningPathLessonSchema,
   updateLearningPathModuleSchema,
 } from './learningPath.schemas';
 import { learningPathService } from './learningPath.service';
+import { videoLearningService } from '../video-learning/videoLearning.service';
 
 const getUserId = (req: Request) => {
   const userId = req.headers['x-user-id'];
@@ -210,11 +212,38 @@ export const learningPathController = {
   searchSnippets: async (req: Request, res: Response) => {
     try {
       const query = typeof req.query.query === 'string' ? req.query.query : '';
-      const snippets = await learningPathService.searchSnippets(query);
+      if (!query.trim()) {
+        return res.json({ snippets: [] });
+      }
+      const result = await videoLearningService.searchPhrase(query.trim(), 25, 0.25, undefined, 60);
+      const snippets = result.items.map((item) => ({
+        id: item.id,
+        phrase: item.phrase,
+        translation: item.translationMatchedText ?? null,
+        contentId: Number(item.contentId),
+        startSeconds: item.startSeconds,
+        endSeconds: item.endSeconds,
+        videoUrl: item.videoUrl ?? null,
+        videoName: item.videoName ?? null,
+      }));
       res.json({ snippets });
     } catch (error) {
       console.error('[LEARNING_PATH] Failed to search snippets', error);
       res.status(500).json({ message: 'Failed to search snippets' });
+    }
+  },
+
+  importSnippet: async (req: Request, res: Response) => {
+    const parseResult = importLearningPathSnippetSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ message: 'Invalid payload' });
+    }
+    try {
+      const snippet = await learningPathService.importSnippet(parseResult.data);
+      res.json({ snippet });
+    } catch (error) {
+      console.error('[LEARNING_PATH] Failed to import snippet', error);
+      res.status(500).json({ message: 'Failed to import snippet' });
     }
   },
 };

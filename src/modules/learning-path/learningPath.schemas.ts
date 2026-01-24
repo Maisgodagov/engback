@@ -43,3 +43,11 @@ export const updateLearningPathLessonSchema = z.object({
 export const lessonProgressStepSchema = z.object({
   lastStepIndex: z.number().int().min(0).optional(),
 });
+
+export const importLearningPathSnippetSchema = z.object({
+  contentId: z.number().int().positive(),
+  startSeconds: z.number().nonnegative(),
+  endSeconds: z.number().positive(),
+  phrase: z.string().min(1),
+  translation: z.string().optional().nullable(),
+});
