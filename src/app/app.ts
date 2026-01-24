@@ -18,6 +18,8 @@ import { gameSnippetsRouter } from '../modules/game-snippets/gameSnippets.router
 import { publicGameSnippetsRouter } from '../modules/game-snippets/publicGameSnippets.router';
 import { audioPhraseLevelsAdminRouter } from '../modules/audio-phrase-levels/audioPhraseLevels.admin.router';
 import { audioPhraseLevelsPublicRouter } from '../modules/audio-phrase-levels/audioPhraseLevels.public.router';
+import { learningPathRouter } from '../modules/learning-path/learningPath.router';
+import { learningPathAdminRouter } from '../modules/learning-path/learningPath.admin.router';
 
 export const createApp = () => {
   const app = express();
@@ -73,8 +75,10 @@ export const createApp = () => {
   app.use('/api/mueller', muellerRouter);
   app.use('/api/admin/game-snippets', gameSnippetsRouter);
   app.use('/api/admin/audio-phrase-levels', audioPhraseLevelsAdminRouter);
+  app.use('/api/admin/learning-path', learningPathAdminRouter);
   app.use('/api/game-snippets', publicGameSnippetsRouter);
   app.use('/api/audio-phrase-levels', audioPhraseLevelsPublicRouter);
+  app.use('/api/learning-path', learningPathRouter);
   
   app.use(errorHandler);
 

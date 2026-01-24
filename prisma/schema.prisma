@@ -31,6 +31,8 @@ model User {
   videoTopicPreferences VideoTopicPreference[]
   audioPhraseLevelProgress UserAudioPhraseLevelProgress[]
   audioPhraseSnippetProgress UserAudioPhraseSnippetProgress[]
+  learningPathModuleProgress LearningPathModuleProgress[]
+  learningPathLessonProgress LearningPathLessonProgress[]
 
   @@map("users")
 }
@@ -340,6 +342,8 @@ model GameSnippet {
   content      VideoLearningContent @relation(fields: [contentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   audioPhraseLevelSnippets AudioPhraseLevelSnippet[]
   audioPhraseSnippetProgress UserAudioPhraseSnippetProgress[]
+  learningPathMainLessons LearningPathLesson[] @relation("LearningPathMainSnippet")
+  learningPathAltSnippetLinks LearningPathLessonAltSnippet[] @relation("LearningPathAltSnippet")
 
   @@index([contentId])
   @@index([phrase])
@@ -498,6 +502,18 @@ enum AudioPhraseExerciseType {
   TRANSLATE
 }
 
+enum LearningPathModuleStatus {
+  LOCKED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum LearningPathLessonStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
 enum VideoLearningContentStatus {
   pending
   processing
@@ -551,4 +567,93 @@ model YandexDictionaryCache {
   @@unique([query, lang], map: "uniq_yandex_query_lang")
   @@index([query], map: "idx_yandex_query")
   @@map("yandex_dictionary_cache")
+}
+
+model LearningPathModule {
+  id            String                     @id @default(cuid())
+  orderIndex    Int                        @map("order_index")
+  title         String                     @db.VarChar(255)
+  levelTag      String?                    @map("level_tag") @db.VarChar(8)
+  releaseStatus String?                    @map("release_status") @db.VarChar(32)
+  isActive      Boolean                    @default(true) @map("is_active")
+  createdAt     DateTime                   @default(now()) @map("created_at")
+  updatedAt     DateTime                   @default(now()) @updatedAt @map("updated_at")
+  lessons       LearningPathLesson[]
+  progress      LearningPathModuleProgress[]
+
+  @@unique([orderIndex], map: "uniq_learning_path_module_order")
+  @@map("learning_path_modules")
+}
+
+model LearningPathLesson {
+  id             String                          @id @default(cuid())
+  moduleId       String                          @map("module_id")
+  orderIndex     Int                             @map("order_index")
+  phraseTextEn   String                          @map("phrase_text_en") @db.VarChar(255)
+  phraseTextRu   String?                         @map("phrase_text_ru") @db.VarChar(255)
+  difficultyTag String?                          @map("difficulty_tag") @db.VarChar(32)
+  xpReward       Int                             @default(25) @map("xp_reward")
+  mainSnippetId  String                          @map("main_snippet_id")
+  targetWords    Json?                           @map("target_words")
+  createdAt      DateTime                        @default(now()) @map("created_at")
+  updatedAt      DateTime                        @default(now()) @updatedAt @map("updated_at")
+  module         LearningPathModule              @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  mainSnippet    GameSnippet                     @relation("LearningPathMainSnippet", fields: [mainSnippetId], references: [id], onDelete: Restrict)
+  altSnippets    LearningPathLessonAltSnippet[]
+  progress       LearningPathLessonProgress[]
+
+  @@unique([moduleId, orderIndex], map: "uniq_learning_path_lesson_order")
+  @@index([mainSnippetId], map: "idx_learning_path_lesson_main_snippet")
+  @@map("learning_path_lessons")
+}
+
+model LearningPathLessonAltSnippet {
+  id        String              @id @default(cuid())
+  lessonId  String              @map("lesson_id")
+  snippetId String              @map("snippet_id")
+  order     Int?                @map("order")
+  lesson    LearningPathLesson  @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  snippet   GameSnippet         @relation("LearningPathAltSnippet", fields: [snippetId], references: [id], onDelete: Cascade)
+
+  @@unique([lessonId, snippetId], map: "uniq_learning_path_lesson_snippet")
+  @@index([snippetId], map: "idx_learning_path_alt_snippet")
+  @@map("learning_path_lesson_alt_snippets")
+}
+
+model LearningPathModuleProgress {
+  id                     String                   @id @default(cuid())
+  userId                 String                   @map("user_id")
+  moduleId               String                   @map("module_id")
+  status                 LearningPathModuleStatus @default(LOCKED)
+  completedLessonsCount  Int                      @default(0) @map("completed_lessons_count")
+  startedAt              DateTime?                @map("started_at")
+  completedAt            DateTime?                @map("completed_at")
+  createdAt              DateTime                 @default(now()) @map("created_at")
+  updatedAt              DateTime                 @default(now()) @updatedAt @map("updated_at")
+  user                   User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  module                 LearningPathModule       @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, moduleId], map: "uniq_learning_path_module_progress")
+  @@index([moduleId], map: "idx_learning_path_module_progress_module")
+  @@map("learning_path_module_progress")
+}
+
+model LearningPathLessonProgress {
+  id            String                   @id @default(cuid())
+  userId        String                   @map("user_id")
+  lessonId      String                   @map("lesson_id")
+  status        LearningPathLessonStatus @default(NOT_STARTED)
+  attemptsCount Int                      @default(0) @map("attempts_count")
+  bestScore     Int?                     @map("best_score")
+  lastStepIndex Int?                     @map("last_step_index")
+  startedAt     DateTime?                @map("started_at")
+  completedAt   DateTime?                @map("completed_at")
+  createdAt     DateTime                 @default(now()) @map("created_at")
+  updatedAt     DateTime                 @default(now()) @updatedAt @map("updated_at")
+  user          User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson        LearningPathLesson       @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lessonId], map: "uniq_learning_path_lesson_progress")
+  @@index([lessonId], map: "idx_learning_path_lesson_progress_lesson")
+  @@map("learning_path_lesson_progress")
 }
