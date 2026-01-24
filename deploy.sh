@@ -60,7 +60,7 @@ mkdir -p logs
 
 # Перезапускаем приложение через PM2
 echo "🔄 Перезапускаем приложение..."
-pm2 reload 2 || pm2 start ecosystem.config.js --env production
+pm2 reload 1 || pm2 start ecosystem.config.js --env production
 
 # Показываем статус
 echo "✅ Развертывание завершено!"
