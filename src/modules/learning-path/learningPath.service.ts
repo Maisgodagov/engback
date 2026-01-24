@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../shared/prisma/prismaClient';
 
 export type LearningPathModuleInput = {
@@ -423,41 +424,69 @@ export const learningPathService = {
   },
 
   startLesson: async (lessonId: string, userId: string, lastStepIndex?: number | null) => {
-    return prisma.learningPathLessonProgress.upsert({
-      where: { userId_lessonId: { userId, lessonId } },
-      update: {
-        status: 'IN_PROGRESS',
-        attemptsCount: { increment: 1 },
-        startedAt: new Date(),
-        lastStepIndex: typeof lastStepIndex === 'number' ? lastStepIndex : undefined,
-      },
-      create: {
-        userId,
-        lessonId,
-        status: 'IN_PROGRESS',
-        attemptsCount: 1,
-        startedAt: new Date(),
-        lastStepIndex: typeof lastStepIndex === 'number' ? lastStepIndex : undefined,
-      },
-    });
+    try {
+      return await prisma.learningPathLessonProgress.upsert({
+        where: { userId_lessonId: { userId, lessonId } },
+        update: {
+          status: 'IN_PROGRESS',
+          attemptsCount: { increment: 1 },
+          startedAt: new Date(),
+          lastStepIndex: typeof lastStepIndex === 'number' ? lastStepIndex : undefined,
+        },
+        create: {
+          userId,
+          lessonId,
+          status: 'IN_PROGRESS',
+          attemptsCount: 1,
+          startedAt: new Date(),
+          lastStepIndex: typeof lastStepIndex === 'number' ? lastStepIndex : undefined,
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        return prisma.learningPathLessonProgress.update({
+          where: { userId_lessonId: { userId, lessonId } },
+          data: {
+            status: 'IN_PROGRESS',
+            attemptsCount: { increment: 1 },
+            startedAt: new Date(),
+            lastStepIndex: typeof lastStepIndex === 'number' ? lastStepIndex : undefined,
+          },
+        });
+      }
+      throw error;
+    }
   },
 
   updateLessonStep: async (lessonId: string, userId: string, lastStepIndex?: number | null) => {
-    return prisma.learningPathLessonProgress.upsert({
-      where: { userId_lessonId: { userId, lessonId } },
-      update: {
-        status: 'IN_PROGRESS',
-        lastStepIndex: typeof lastStepIndex === 'number' ? lastStepIndex : undefined,
-      },
-      create: {
-        userId,
-        lessonId,
-        status: 'IN_PROGRESS',
-        attemptsCount: 1,
-        startedAt: new Date(),
-        lastStepIndex: typeof lastStepIndex === 'number' ? lastStepIndex : undefined,
-      },
-    });
+    try {
+      return await prisma.learningPathLessonProgress.upsert({
+        where: { userId_lessonId: { userId, lessonId } },
+        update: {
+          status: 'IN_PROGRESS',
+          lastStepIndex: typeof lastStepIndex === 'number' ? lastStepIndex : undefined,
+        },
+        create: {
+          userId,
+          lessonId,
+          status: 'IN_PROGRESS',
+          attemptsCount: 1,
+          startedAt: new Date(),
+          lastStepIndex: typeof lastStepIndex === 'number' ? lastStepIndex : undefined,
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        return prisma.learningPathLessonProgress.update({
+          where: { userId_lessonId: { userId, lessonId } },
+          data: {
+            status: 'IN_PROGRESS',
+            lastStepIndex: typeof lastStepIndex === 'number' ? lastStepIndex : undefined,
+          },
+        });
+      }
+      throw error;
+    }
   },
 
   completeLesson: async (lessonId: string, userId: string, lastStepIndex?: number | null) => {
