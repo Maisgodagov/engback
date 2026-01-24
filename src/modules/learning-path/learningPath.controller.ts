@@ -215,7 +215,7 @@ export const learningPathController = {
       if (!query.trim()) {
         return res.json({ snippets: [] });
       }
-      const result = await videoLearningService.searchPhrase(query.trim(), 25, 0.25, undefined, 60);
+      const result = await videoLearningService.searchPhrase(query.trim(), 25, 1, undefined, 60);
       const snippets = result.items.map((item) => ({
         id: item.id,
         phrase: item.phrase,
