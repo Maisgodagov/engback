@@ -29,6 +29,8 @@ model User {
   videoLearningProgress VideoLearningProgress[]
   videoLikes            VideoLike[]
   videoTopicPreferences VideoTopicPreference[]
+  audioPhraseLevelProgress UserAudioPhraseLevelProgress[]
+  audioPhraseSnippetProgress UserAudioPhraseSnippetProgress[]
 
   @@map("users")
 }
@@ -336,10 +338,76 @@ model GameSnippet {
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @default(now()) @updatedAt
   content      VideoLearningContent @relation(fields: [contentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  audioPhraseLevelSnippets AudioPhraseLevelSnippet[]
+  audioPhraseSnippetProgress UserAudioPhraseSnippetProgress[]
 
   @@index([contentId])
   @@index([phrase])
   @@map("game_snippets")
+}
+
+model AudioPhraseLevel {
+  id          String                     @id @default(cuid())
+  order       Int                        @unique
+  xpReward    Int                        @default(0) @map("xp_reward")
+  isActive    Boolean                    @default(true) @map("is_active")
+  createdAt   DateTime                   @default(now()) @map("created_at")
+  updatedAt   DateTime                   @default(now()) @updatedAt @map("updated_at")
+  levelSnippets AudioPhraseLevelSnippet[]
+  userProgress UserAudioPhraseLevelProgress[]
+  snippetProgress UserAudioPhraseSnippetProgress[]
+
+  @@map("audio_phrase_levels")
+}
+
+model AudioPhraseLevelSnippet {
+  id        String          @id @default(cuid())
+  levelId   String          @map("level_id")
+  snippetId String          @map("snippet_id")
+  order     Int?            @map("order")
+  level     AudioPhraseLevel @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  snippet   GameSnippet     @relation(fields: [snippetId], references: [id], onDelete: Cascade)
+
+  @@unique([levelId, snippetId])
+  @@index([snippetId])
+  @@map("audio_phrase_level_snippets")
+}
+
+model UserAudioPhraseLevelProgress {
+  id          String         @id @default(cuid())
+  userId      String         @map("user_id")
+  levelId     String         @map("level_id")
+  status      ProgressStatus @default(NOT_STARTED)
+  score       Int?
+  startedAt   DateTime?      @map("started_at")
+  completedAt DateTime?      @map("completed_at")
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @default(now()) @updatedAt @map("updated_at")
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  level       AudioPhraseLevel @relation(fields: [levelId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, levelId])
+  @@index([levelId])
+  @@map("user_audio_phrase_level_progress")
+}
+
+model UserAudioPhraseSnippetProgress {
+  id           String                 @id @default(cuid())
+  userId       String                 @map("user_id")
+  levelId      String                 @map("level_id")
+  snippetId    String                 @map("snippet_id")
+  exerciseType AudioPhraseExerciseType @map("exercise_type")
+  isCorrect    Boolean                @map("is_correct")
+  createdAt    DateTime               @default(now()) @map("created_at")
+  updatedAt    DateTime               @default(now()) @updatedAt @map("updated_at")
+  user         User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  level        AudioPhraseLevel       @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  snippet      GameSnippet            @relation(fields: [snippetId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, levelId, snippetId, exerciseType], map: "uniq_user_level_snippet_exercise")
+  @@index([levelId])
+  @@index([snippetId])
+  @@map("user_audio_phrase_snippet_progress")
 }
 
 model VideoTopicPreference {
@@ -421,6 +489,13 @@ enum VideoLearningContentVocabularyComplexity {
   advanced
 
   @@map("video_learning_content_vocabulary_complexity")
+}
+
+enum AudioPhraseExerciseType {
+  MISSING
+  ASSEMBLE
+  ODDWORD
+  TRANSLATE
 }
 
 enum VideoLearningContentStatus {
