@@ -15,6 +15,7 @@ const ensureTable = async () => {
       id VARCHAR(191) PRIMARY KEY,
       userId VARCHAR(191) UNIQUE NOT NULL,
       theme VARCHAR(16) NOT NULL,
+      reader_font_size INT NOT NULL DEFAULT 18,
       createdAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
     )`,

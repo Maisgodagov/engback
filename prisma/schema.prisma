@@ -31,6 +31,8 @@ model User {
   videoTopicPreferences VideoTopicPreference[]
   audioPhraseLevelProgress UserAudioPhraseLevelProgress[]
   audioPhraseSnippetProgress UserAudioPhraseSnippetProgress[]
+  readingShelf          ReadingShelf[]
+  readingProgress       ReadingProgress[]
 
   @@map("users")
 }
@@ -76,6 +78,7 @@ model UserPreference {
   id        String   @id @default(cuid())
   userId    String   @unique(map: "userId")
   theme     String   @db.VarChar(16)
+  readerFontSize Int @default(18) @map("reader_font_size")
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
@@ -551,4 +554,54 @@ model YandexDictionaryCache {
   @@unique([query, lang], map: "uniq_yandex_query_lang")
   @@index([query], map: "idx_yandex_query")
   @@map("yandex_dictionary_cache")
+}
+
+model ReadingBook {
+  id          String   @id @default(cuid())
+  title       String   @db.VarChar(255)
+  author      String?  @db.VarChar(255)
+  description String?  @db.Text
+  coverUrl    String?  @map("cover_url") @db.VarChar(512)
+  fileUrl     String   @map("file_url") @db.VarChar(512)
+  language    String   @default("en") @db.VarChar(16)
+  wordCount   Int?     @map("word_count")
+  isPublished Boolean  @default(true) @map("is_published")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+  shelfEntries ReadingShelf[]
+  progressEntries ReadingProgress[]
+
+  @@index([isPublished], map: "idx_reading_book_published")
+  @@index([createdAt], map: "idx_reading_book_created_at")
+  @@map("reading_books")
+}
+
+model ReadingShelf {
+  id        String       @id @default(cuid())
+  userId    String       @map("user_id")
+  bookId    String       @map("book_id")
+  createdAt DateTime     @default(now()) @map("created_at")
+  book      ReadingBook  @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, bookId], map: "uniq_reading_shelf_user_book")
+  @@index([userId], map: "idx_reading_shelf_user")
+  @@index([bookId], map: "idx_reading_shelf_book")
+  @@map("reading_shelf")
+}
+
+model ReadingProgress {
+  id         String      @id @default(cuid())
+  userId     String      @map("user_id")
+  bookId     String      @map("book_id")
+  position   Int         @default(0)
+  progress   Float       @default(0)
+  updatedAt  DateTime    @default(now()) @updatedAt @map("updated_at")
+  book       ReadingBook @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, bookId], map: "uniq_reading_progress_user_book")
+  @@index([userId], map: "idx_reading_progress_user")
+  @@index([bookId], map: "idx_reading_progress_book")
+  @@map("reading_progress")
 }

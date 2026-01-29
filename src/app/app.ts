@@ -15,6 +15,7 @@ import { exercisesRouter } from '../modules/exercises/exercises.router';
 import { muellerRouter } from '../modules/mueller/mueller.router';
 import { gameSnippetsRouter } from '../modules/game-snippets/gameSnippets.router';
 import { publicGameSnippetsRouter } from '../modules/game-snippets/publicGameSnippets.router';
+import { readingRouter } from '../modules/reading/reading.router';
 
 export const createApp = () => {
   const app = express();
@@ -69,6 +70,7 @@ export const createApp = () => {
   app.use('/api/mueller', muellerRouter);
   app.use('/api/admin/game-snippets', gameSnippetsRouter);
   app.use('/api/game-snippets', publicGameSnippetsRouter);
+  app.use('/api/reading', readingRouter);
   
   app.use(errorHandler);
 
