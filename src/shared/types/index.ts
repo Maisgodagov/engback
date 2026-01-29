@@ -129,38 +129,6 @@ export type RoleGuard = {
   allowedRoutes: string[];
 };
 
-export enum LessonProgressStatus {
-  LOCKED = "LOCKED",
-  AVAILABLE = "AVAILABLE",
-  IN_PROGRESS = "IN_PROGRESS",
-  COMPLETED = "COMPLETED",
-}
-
-export interface RoadmapLessonDto {
-  id: string;
-  title: string;
-  description?: string;
-  icon?: string;
-  xpReward: number;
-  order: number;
-  difficulty: number;
-  skill?: string;
-  status: LessonProgressStatus;
-  stars: number;
-  isCurrent: boolean;
-  moduleId: string;
-}
-
-export interface RoadmapModuleDto {
-  id: string;
-  title: string;
-  description?: string;
-  icon?: string;
-  theme?: string;
-  order: number;
-  lessons: RoadmapLessonDto[];
-}
-
 export interface AdminCourseModuleDto {
   id: string;
   title: string;

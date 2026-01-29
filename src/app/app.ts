@@ -9,15 +9,12 @@ import { coursesRouter } from '../modules/courses/courses.router';
 import { usersRouter } from '../modules/users/users.router';
 import { dictionaryRouter } from '../modules/dictionary/dictionary.router';
 import { preferencesRouter } from '../modules/preferences/preferences.router';
-import { roadmapRouter } from '../modules/roadmap/roadmap.router';
 import { adminRouter } from '../modules/admin/admin.router';
 import { videoLearningRouter } from '../modules/video-learning/videoLearning.router';
 import { exercisesRouter } from '../modules/exercises/exercises.router';
 import { muellerRouter } from '../modules/mueller/mueller.router';
 import { gameSnippetsRouter } from '../modules/game-snippets/gameSnippets.router';
 import { publicGameSnippetsRouter } from '../modules/game-snippets/publicGameSnippets.router';
-import { learningPathRouter } from '../modules/learning-path/learningPath.router';
-import { learningPathAdminRouter } from '../modules/learning-path/learningPath.admin.router';
 
 export const createApp = () => {
   const app = express();
@@ -66,15 +63,12 @@ export const createApp = () => {
   app.use('/api/courses', coursesRouter);
   app.use('/api/dictionary', dictionaryRouter);
   app.use('/api/preferences', preferencesRouter);
-  app.use('/api/roadmap', roadmapRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/video-learning', videoLearningRouter);
   app.use('/api/exercises', exercisesRouter);
   app.use('/api/mueller', muellerRouter);
   app.use('/api/admin/game-snippets', gameSnippetsRouter);
-  app.use('/api/admin/learning-path', learningPathAdminRouter);
   app.use('/api/game-snippets', publicGameSnippetsRouter);
-  app.use('/api/learning-path', learningPathRouter);
   
   app.use(errorHandler);
 
