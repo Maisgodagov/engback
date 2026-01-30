@@ -15,6 +15,13 @@ export const createBookSchema = z.object({
   isPublished: z.boolean().optional(),
 });
 
+export const uploadBookSchema = z.object({
+  title: z.string().min(1).max(255).optional(),
+  author: z.string().max(255).optional(),
+  description: z.string().max(5000).optional(),
+  language: z.string().max(16).optional(),
+});
+
 export const addShelfSchema = z.object({
   bookId: z.string().min(1),
 });

@@ -14,7 +14,10 @@
     "prisma:seed": "ts-node prisma/seed.ts",
     "backfill:transcripts": "ts-node scripts/backfillTranscriptTokens.ts",
     "word-progress:recalc": "ts-node scripts/recalculateWordProgress.ts",
-    "snippets:generate": "ts-node scripts/generateGameSnippets.ts"
+    "snippets:generate": "ts-node scripts/generateGameSnippets.ts",
+    "reading:epub": "ts-node scripts/reading/epub-to-json.ts",
+    "reading:import": "ts-node scripts/reading/import-book.ts",
+    "reading:upload": "ts-node scripts/reading/upload-book.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
@@ -23,9 +26,13 @@
     "@prisma/client": "^5.18.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
+    "@aws-sdk/client-s3": "^3.665.0",
+    "epub2": "^3.0.0-beta.3",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
     "helmet": "^8.0.1",
+    "cheerio": "^1.0.0-rc.12",
     "lru-cache": "^11.2.2",
     "morgan": "^1.10.0",
     "mysql2": "^3.15.3",
@@ -36,6 +43,7 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
+    "@types/multer": "^1.4.12",
     "@types/morgan": "^1.9.9",
     "@types/node": "^20.14.10",
     "eslint": "^9.9.0",

@@ -6,6 +6,7 @@ import {
   createBookSchema,
   updateProgressSchema,
   updateReaderPreferencesSchema,
+  uploadBookSchema,
 } from './reading.schemas';
 import { readingService } from './reading.service';
 
@@ -48,6 +49,23 @@ export const createBook = async (req: Request, res: Response) => {
   const payload = createBookSchema.parse(req.body);
   const book = await readingService.createBook(payload);
   res.status(201).json(book);
+};
+
+export const uploadBook = async (req: Request, res: Response) => {
+  if (!requireAdmin(req, res)) return;
+  const payload = uploadBookSchema.parse(req.body ?? {});
+  const file = (req as any).file as { buffer: Buffer; originalname: string } | undefined;
+  if (!file) {
+    res.status(400).json({ message: 'Missing epub file' });
+    return;
+  }
+  try {
+    const book = await readingService.uploadBookFromEpub(file, payload);
+    res.status(201).json(book);
+  } catch (err: any) {
+    console.error('Failed to upload book', err);
+    res.status(500).json({ message: err?.message ?? 'Failed to upload book' });
+  }
 };
 
 export const addToShelf = async (req: Request, res: Response) => {

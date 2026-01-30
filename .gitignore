@@ -38,4 +38,6 @@ apps/mobile/
 apps/mobile-preview/
 packages/
 scripts/
+!scripts/reading/
+!scripts/reading/**
 com.facebook.react.devsupport.BundleDownloader

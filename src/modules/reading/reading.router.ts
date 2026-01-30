@@ -1,12 +1,15 @@
 import { Router } from 'express';
+import multer from 'multer';
 
 import * as readingController from './reading.controller';
 
 export const readingRouter = Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 readingRouter.get('/books', readingController.listBooks);
 readingRouter.get('/books/:id', readingController.getBook);
 readingRouter.post('/books', readingController.createBook);
+readingRouter.post('/books/upload', upload.single('file'), readingController.uploadBook);
 
 readingRouter.get('/shelf', readingController.getShelf);
 readingRouter.post('/shelf', readingController.addToShelf);
