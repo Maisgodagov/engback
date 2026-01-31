@@ -373,7 +373,7 @@ const uploadBookFromEpub = async (file: { buffer: Buffer; originalname: string }
 
     const chapterId = `c${i + 1}`;
     const chapterFile = `chapters/${chapterId}.json`;
-    const chapterTitle = (item.title || `Chapter ${i + 1}`).trim();
+    const chapterTitle = (item.title || "").trim();
 
     await fs.writeFile(
       path.join(processedDir, chapterFile),
