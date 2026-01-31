@@ -278,6 +278,56 @@ const extractParagraphs = (html: string): string[] => {
 const countWords = (paragraphs: string[]): number =>
   paragraphs.reduce((acc, p) => acc + p.split(/\s+/).filter(Boolean).length, 0);
 
+const isTocLike = (title: string, paragraphs: string[]): boolean => {
+  const lowerTitle = title.toLowerCase();
+  const text = paragraphs.join(" ").toLowerCase();
+  const tocKeywords = [
+    "table of contents",
+    "contents",
+    "toc",
+    "оглавление",
+    "содержание",
+    "contents of",
+  ];
+  const hasTocKeyword = tocKeywords.some((key) => lowerTitle.includes(key) || text.includes(key));
+  if (!hasTocKeyword) return false;
+
+  const chapterLinkPattern = /\bchapter\s+\d+\b|\bглава\s+\d+\b/gi;
+  const matches = text.match(chapterLinkPattern);
+  return (matches?.length ?? 0) >= 8 || text.split(/\n|\.|\s{2,}/).length >= 20;
+};
+
+const isCopyrightLike = (title: string, paragraphs: string[]): boolean => {
+  const lowerTitle = title.toLowerCase();
+  const text = paragraphs.join(" ").toLowerCase();
+  const keywords = [
+    "copyright",
+    "all rights reserved",
+    "license",
+    "licence",
+    "isbn",
+    "pub",
+    "published",
+    "publisher",
+    "printing",
+    "edition",
+    "www.",
+    "http://",
+    "https://",
+    "copyright ©",
+    "©",
+    "правооблад",
+    "все права защищены",
+    "лиценз",
+    "издатель",
+    "издательство",
+  ];
+  const hasKeyword = keywords.some((key) => lowerTitle.includes(key) || text.includes(key));
+  if (!hasKeyword) return false;
+  const wordCount = countWords(paragraphs);
+  return wordCount <= 800;
+};
+
 const saveCover = async (epub: EPub, outputDir: string): Promise<string | undefined> => {
   const coverId = epub.metadata?.cover;
   if (!coverId) return undefined;
@@ -374,6 +424,10 @@ const uploadBookFromEpub = async (file: { buffer: Buffer; originalname: string }
     const chapterId = `c${i + 1}`;
     const chapterFile = `chapters/${chapterId}.json`;
     const chapterTitle = (item.title || "").trim();
+
+    if (isTocLike(chapterTitle, paragraphs) || isCopyrightLike(chapterTitle, paragraphs)) {
+      continue;
+    }
 
     await fs.writeFile(
       path.join(processedDir, chapterFile),
