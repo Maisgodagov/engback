@@ -278,9 +278,9 @@ const extractParagraphs = (html: string): string[] => {
 const countWords = (paragraphs: string[]): number =>
   paragraphs.reduce((acc, p) => acc + p.split(/\s+/).filter(Boolean).length, 0);
 
-const isTocLike = (title: string, fullText: string): boolean => {
+const isTocLike = (title: string, combinedText: string, paragraphs: string[]): boolean => {
   const lowerTitle = title.toLowerCase();
-  const text = fullText.toLowerCase();
+  const text = combinedText.toLowerCase();
   const tocKeywords = [
     "table of contents",
     "contents",
@@ -290,17 +290,26 @@ const isTocLike = (title: string, fullText: string): boolean => {
     "contents of",
   ];
   const hasTocKeyword = tocKeywords.some((key) => lowerTitle.includes(key) || text.includes(key));
+  if (hasTocKeyword) return true;
+
   const chapterLinkPattern = /\bchapter\s+\d+\b|\bглава\s+\d+\b/gi;
   const matches = text.match(chapterLinkPattern);
   const chapterCount = matches?.length ?? 0;
-  if (hasTocKeyword && chapterCount >= 6) return true;
-  if (chapterCount >= 12 && text.length < 8000) return true;
+  if (chapterCount >= 10 && text.length < 12000) return true;
+
+  if (paragraphs.length > 6) {
+    const avgWords =
+      paragraphs.reduce((acc, p) => acc + p.split(/\s+/).filter(Boolean).length, 0) /
+      Math.max(1, paragraphs.length);
+    if (chapterCount >= 6 && avgWords <= 6) return true;
+  }
+
   return false;
 };
 
-const isCopyrightLike = (title: string, fullText: string): boolean => {
+const isCopyrightLike = (title: string, combinedText: string): boolean => {
   const lowerTitle = title.toLowerCase();
-  const text = fullText.toLowerCase();
+  const text = combinedText.toLowerCase();
   const keywords = [
     "copyright",
     "all rights reserved",
@@ -419,13 +428,15 @@ const uploadBookFromEpub = async (file: { buffer: Buffer; originalname: string }
     }).catch(() => '');
 
     const paragraphs = extractParagraphs(html);
-    const fullText = normalizeText(cheerio.load(html).text());
+    const combinedText = normalizeText(
+      paragraphs.join(' ').trim() || cheerio.load(html).text(),
+    );
 
     const chapterId = `c${i + 1}`;
     const chapterFile = `chapters/${chapterId}.json`;
     const chapterTitle = (item.title || "").trim();
 
-    if (isTocLike(chapterTitle, fullText) || isCopyrightLike(chapterTitle, fullText)) {
+    if (isTocLike(chapterTitle, combinedText, paragraphs) || isCopyrightLike(chapterTitle, combinedText)) {
       continue;
     }
 
