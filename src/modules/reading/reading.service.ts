@@ -278,9 +278,9 @@ const extractParagraphs = (html: string): string[] => {
 const countWords = (paragraphs: string[]): number =>
   paragraphs.reduce((acc, p) => acc + p.split(/\s+/).filter(Boolean).length, 0);
 
-const isTocLike = (title: string, paragraphs: string[]): boolean => {
+const isTocLike = (title: string, fullText: string): boolean => {
   const lowerTitle = title.toLowerCase();
-  const text = paragraphs.join(" ").toLowerCase();
+  const text = fullText.toLowerCase();
   const tocKeywords = [
     "table of contents",
     "contents",
@@ -290,16 +290,17 @@ const isTocLike = (title: string, paragraphs: string[]): boolean => {
     "contents of",
   ];
   const hasTocKeyword = tocKeywords.some((key) => lowerTitle.includes(key) || text.includes(key));
-  if (!hasTocKeyword) return false;
-
   const chapterLinkPattern = /\bchapter\s+\d+\b|\bглава\s+\d+\b/gi;
   const matches = text.match(chapterLinkPattern);
-  return (matches?.length ?? 0) >= 8 || text.split(/\n|\.|\s{2,}/).length >= 20;
+  const chapterCount = matches?.length ?? 0;
+  if (hasTocKeyword && chapterCount >= 6) return true;
+  if (chapterCount >= 12 && text.length < 8000) return true;
+  return false;
 };
 
-const isCopyrightLike = (title: string, paragraphs: string[]): boolean => {
+const isCopyrightLike = (title: string, fullText: string): boolean => {
   const lowerTitle = title.toLowerCase();
-  const text = paragraphs.join(" ").toLowerCase();
+  const text = fullText.toLowerCase();
   const keywords = [
     "copyright",
     "all rights reserved",
@@ -324,8 +325,8 @@ const isCopyrightLike = (title: string, paragraphs: string[]): boolean => {
   ];
   const hasKeyword = keywords.some((key) => lowerTitle.includes(key) || text.includes(key));
   if (!hasKeyword) return false;
-  const wordCount = countWords(paragraphs);
-  return wordCount <= 800;
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  return wordCount <= 1000;
 };
 
 const saveCover = async (epub: EPub, outputDir: string): Promise<string | undefined> => {
@@ -418,16 +419,18 @@ const uploadBookFromEpub = async (file: { buffer: Buffer; originalname: string }
     }).catch(() => '');
 
     const paragraphs = extractParagraphs(html);
-    const wordCount = countWords(paragraphs);
-    totalWords += wordCount;
+    const fullText = normalizeText(cheerio.load(html).text());
 
     const chapterId = `c${i + 1}`;
     const chapterFile = `chapters/${chapterId}.json`;
     const chapterTitle = (item.title || "").trim();
 
-    if (isTocLike(chapterTitle, paragraphs) || isCopyrightLike(chapterTitle, paragraphs)) {
+    if (isTocLike(chapterTitle, fullText) || isCopyrightLike(chapterTitle, fullText)) {
       continue;
     }
+
+    const wordCount = countWords(paragraphs);
+    totalWords += wordCount;
 
     await fs.writeFile(
       path.join(processedDir, chapterFile),

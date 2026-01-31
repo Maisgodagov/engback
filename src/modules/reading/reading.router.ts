@@ -4,7 +4,11 @@ import multer from 'multer';
 import * as readingController from './reading.controller';
 
 export const readingRouter = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+const uploadMaxMb = Number(process.env.READING_UPLOAD_MAX_MB ?? '200');
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: Math.max(1, uploadMaxMb) * 1024 * 1024 },
+});
 
 readingRouter.get('/books', readingController.listBooks);
 readingRouter.get('/books/:id', readingController.getBook);
