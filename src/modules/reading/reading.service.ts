@@ -130,6 +130,24 @@ const createBook = async (payload: {
   });
 };
 
+const updateBook = async (
+  bookId: string,
+  payload: { title?: string; author?: string | null; description?: string | null },
+) => {
+  return prisma.readingBook.update({
+    where: { id: bookId },
+    data: {
+      ...(payload.title !== undefined ? { title: payload.title } : {}),
+      ...(payload.author !== undefined ? { author: payload.author } : {}),
+      ...(payload.description !== undefined ? { description: payload.description } : {}),
+    },
+  });
+};
+
+const deleteBook = async (bookId: string) => {
+  await prisma.readingBook.delete({ where: { id: bookId } });
+};
+
 const addToShelf = async (userId: string, bookId: string) => {
   await prisma.readingShelf.upsert({
     where: { userId_bookId: { userId, bookId } },
@@ -515,6 +533,8 @@ export const readingService = {
   listBooks,
   getBook,
   createBook,
+  updateBook,
+  deleteBook,
   addToShelf,
   removeFromShelf,
   getShelf,

@@ -13,6 +13,8 @@ const upload = multer({
 readingRouter.get('/books', readingController.listBooks);
 readingRouter.get('/books/:id', readingController.getBook);
 readingRouter.post('/books', readingController.createBook);
+readingRouter.put('/books/:id', readingController.updateBook);
+readingRouter.delete('/books/:id', readingController.deleteBook);
 readingRouter.post('/books/upload', upload.single('file'), readingController.uploadBook);
 
 readingRouter.get('/shelf', readingController.getShelf);

@@ -4,6 +4,7 @@ import {
   addShelfSchema,
   bookIdParamSchema,
   createBookSchema,
+  updateBookSchema,
   updateProgressSchema,
   updateReaderPreferencesSchema,
   uploadBookSchema,
@@ -66,6 +67,21 @@ export const uploadBook = async (req: Request, res: Response) => {
     console.error('Failed to upload book', err);
     res.status(500).json({ message: err?.message ?? 'Failed to upload book' });
   }
+};
+
+export const updateBook = async (req: Request, res: Response) => {
+  if (!requireAdmin(req, res)) return;
+  const params = bookIdParamSchema.parse({ id: req.params.id });
+  const payload = updateBookSchema.parse(req.body);
+  const book = await readingService.updateBook(params.id, payload);
+  res.json(book);
+};
+
+export const deleteBook = async (req: Request, res: Response) => {
+  if (!requireAdmin(req, res)) return;
+  const params = bookIdParamSchema.parse({ id: req.params.id });
+  await readingService.deleteBook(params.id);
+  res.status(204).send();
 };
 
 export const addToShelf = async (req: Request, res: Response) => {
