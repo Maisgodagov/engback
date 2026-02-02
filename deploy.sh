@@ -37,7 +37,9 @@ git reset --hard origin/prod
 
 # Устанавливаем зависимости (включая dev для сборки)
 echo "📦 Устанавливаем зависимости..."
-npm ci
+export NODE_OPTIONS="--max_old_space_size=2048"
+export npm_config_jobs=2
+npm ci --no-audit --no-fund --omit=optional
 
 # Генерируем Prisma клиент
 echo "🔧 Генерируем Prisma клиент..."
