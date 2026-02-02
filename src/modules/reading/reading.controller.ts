@@ -57,11 +57,11 @@ export const uploadBook = async (req: Request, res: Response) => {
   const payload = uploadBookSchema.parse(req.body ?? {});
   const file = (req as any).file as { buffer: Buffer; originalname: string } | undefined;
   if (!file) {
-    res.status(400).json({ message: 'Missing epub file' });
+    res.status(400).json({ message: 'Missing fb2 file' });
     return;
   }
   try {
-    const book = await readingService.uploadBookFromEpub(file, payload);
+    const book = await readingService.uploadBookFromFb2(file, payload);
     res.status(201).json(book);
   } catch (err: any) {
     console.error('Failed to upload book', err);

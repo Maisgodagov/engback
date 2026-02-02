@@ -2,9 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { EPub } from 'epub2';
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const cheerio = require('cheerio');
+import { initFb2File, type Fb2Metadata } from '@lingo-reader/fb2-parser';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { prisma } from '../../shared/prisma/prismaClient';
 
@@ -33,23 +31,6 @@ type UploadOptions = {
   author?: string;
   description?: string;
   language?: string;
-};
-
-type ChapterInfo = {
-  id: string;
-  title: string;
-  file: string;
-  wordCount: number;
-};
-
-type BookManifest = {
-  id: string;
-  title: string;
-  author?: string;
-  language: string;
-  wordCount: number;
-  coverUrl?: string;
-  chapters: ChapterInfo[];
 };
 
 const listBooks = async (userId?: string | null): Promise<ListBooksResult> => {
@@ -260,119 +241,17 @@ const slugify = (value: string): string =>
     .replace(/^-+|-+$/g, '')
     .slice(0, 64) || `book-${Date.now()}`;
 
-const loadEpub = (filePath: string): Promise<EPub> =>
-  new Promise((resolve, reject) => {
-    const epub = new EPub(filePath);
-    epub.on('error', (err: Error) => reject(err));
-    epub.on('end', () => resolve(epub));
-    epub.parse();
-  });
-
-const normalizeText = (value: string): string =>
-  value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
-
-const extractParagraphs = (html: string): string[] => {
-  const normalizedHtml = html.replace(/<br\s*\/?>(\s*)/gi, '\n');
-  const $ = cheerio.load(normalizedHtml);
-  const paragraphs: string[] = [];
-
-  $('p').each((_: number, el: unknown) => {
-    const text = normalizeText($(el as any).text());
-    if (text.length > 0) paragraphs.push(text);
-  });
-
-  if (paragraphs.length > 0) return paragraphs;
-
-  const bodyText = $('body').text() || $.root().text();
-  const split = bodyText
-    .replace(/\r/g, '')
-    .split(/\n{2,}/)
-    .map((chunk: string) => normalizeText(chunk))
-    .filter(Boolean);
-
-  return split.length ? split : [normalizeText(bodyText)].filter(Boolean);
-};
-
-const countWords = (paragraphs: string[]): number =>
-  paragraphs.reduce((acc, p) => acc + p.split(/\s+/).filter(Boolean).length, 0);
-
-const isTocLike = (title: string, combinedText: string, paragraphs: string[]): boolean => {
-  const lowerTitle = title.toLowerCase();
-  const text = combinedText.toLowerCase();
-  const tocKeywords = [
-    "table of contents",
-    "contents",
-    "toc",
-    "оглавление",
-    "содержание",
-    "contents of",
-  ];
-  const hasTocKeyword = tocKeywords.some((key) => lowerTitle.includes(key) || text.includes(key));
-  if (hasTocKeyword) return true;
-
-  const chapterLinkPattern = /\bchapter\s+\d+\b|\bглава\s+\d+\b/gi;
-  const matches = text.match(chapterLinkPattern);
-  const chapterCount = matches?.length ?? 0;
-  if (chapterCount >= 10 && text.length < 12000) return true;
-
-  if (paragraphs.length > 6) {
-    const avgWords =
-      paragraphs.reduce((acc, p) => acc + p.split(/\s+/).filter(Boolean).length, 0) /
-      Math.max(1, paragraphs.length);
-    if (chapterCount >= 6 && avgWords <= 6) return true;
-  }
-
-  return false;
-};
-
-const isCopyrightLike = (title: string, combinedText: string): boolean => {
-  const lowerTitle = title.toLowerCase();
-  const text = combinedText.toLowerCase();
-  const keywords = [
-    "copyright",
-    "all rights reserved",
-    "license",
-    "licence",
-    "isbn",
-    "pub",
-    "published",
-    "publisher",
-    "printing",
-    "edition",
-    "www.",
-    "http://",
-    "https://",
-    "copyright ©",
-    "©",
-    "правооблад",
-    "все права защищены",
-    "лиценз",
-    "издатель",
-    "издательство",
-  ];
-  const hasKeyword = keywords.some((key) => lowerTitle.includes(key) || text.includes(key));
-  if (!hasKeyword) return false;
-  const wordCount = text.split(/\s+/).filter(Boolean).length;
-  return wordCount <= 1000;
-};
-
-const saveCover = async (epub: EPub, outputDir: string): Promise<string | undefined> => {
-  const coverId = epub.metadata?.cover;
-  if (!coverId) return undefined;
-
-  const image = await new Promise<{ data: Buffer; mime: string } | null>((resolve) => {
-    epub.getImage(coverId, (err: Error | null, data?: Buffer, mime?: string) => {
-      if (err || !data || !mime) return resolve(null);
-      resolve({ data, mime });
-    });
-  });
-
-  if (!image) return undefined;
-
-  const ext = image.mime === 'image/png' ? 'png' : image.mime === 'image/webp' ? 'webp' : 'jpg';
-  const coverPath = path.join(outputDir, 'assets', `cover.${ext}`);
-  await fs.writeFile(coverPath, image.data);
-  return `assets/cover.${ext}`;
+const resolveAuthor = (metadata?: Fb2Metadata): string | undefined => {
+  const author = metadata?.author;
+  if (!author) return undefined;
+  if (author.name?.trim()) return author.name.trim();
+  const parts = [author.firstName, author.middleName, author.lastName]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+  if (parts) return parts;
+  if (author.nickname?.trim()) return author.nickname.trim();
+  return undefined;
 };
 
 const listFiles = async (dir: string): Promise<string[]> => {
@@ -392,7 +271,7 @@ const listFiles = async (dir: string): Promise<string[]> => {
 const contentTypeFor = (filePath: string) => {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.json') return 'application/json';
-  if (ext === '.epub') return 'application/epub+zip';
+  if (ext === '.fb2') return 'application/xml';
   if (ext === '.webp') return 'image/webp';
   if (ext === '.png') return 'image/png';
   if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
@@ -400,16 +279,25 @@ const contentTypeFor = (filePath: string) => {
   return 'application/octet-stream';
 };
 
-const uploadBookFromEpub = async (file: { buffer: Buffer; originalname: string }, options: UploadOptions) => {
+const uploadBookFromFb2 = async (file: { buffer: Buffer; originalname: string }, options: UploadOptions) => {
   const env = storageConfig();
   const tmpBase = await fs.mkdtemp(path.join(os.tmpdir(), 'reading-'));
-  const inputPath = path.join(tmpBase, file.originalname);
+  const safeName = file.originalname?.trim() || 'book.fb2';
+  const inputPath = path.join(tmpBase, safeName);
   await fs.writeFile(inputPath, file.buffer);
 
-  const epub = await loadEpub(inputPath);
-  const title = options.title?.trim() || epub.metadata?.title?.trim() || 'Untitled';
-  const author = options.author?.trim() || epub.metadata?.creator?.trim() || undefined;
-  const language = options.language?.trim() || 'en';
+  const tempAssetsDir = path.join(tmpBase, 'assets-tmp');
+  await ensureDir(tempAssetsDir);
+
+  const fb2 = await initFb2File(new Uint8Array(file.buffer), tempAssetsDir);
+  const metadata = fb2.getMetadata();
+  const title =
+    options.title?.trim() ||
+    metadata.title?.trim() ||
+    metadata.bookName?.trim() ||
+    'Untitled';
+  const author = options.author?.trim() || resolveAuthor(metadata) || undefined;
+  const language = options.language?.trim() || metadata.language?.trim() || 'en';
 
   let bookId = slugify(title);
   const existing = await prisma.readingBook.findUnique({ where: { id: bookId } });
@@ -419,68 +307,22 @@ const uploadBookFromEpub = async (file: { buffer: Buffer; originalname: string }
 
   const baseDir = path.join(tmpBase, bookId);
   const originalDir = path.join(baseDir, 'original');
-  const processedDir = path.join(baseDir, 'processed');
-  const chaptersDir = path.join(processedDir, 'chapters');
   const assetsDir = path.join(baseDir, 'assets');
 
   await ensureDir(originalDir);
-  await ensureDir(chaptersDir);
-  await ensureDir(assetsDir);
 
-  await fs.copyFile(inputPath, path.join(originalDir, 'source.epub'));
+  await fs.copyFile(inputPath, path.join(originalDir, 'source.fb2'));
 
-  const coverPath = await saveCover(epub, baseDir);
-
-  const chapters: ChapterInfo[] = [];
-  let totalWords = 0;
-
-  for (let i = 0; i < epub.flow.length; i += 1) {
-    const item = epub.flow[i];
-    if (!item?.id) continue;
-
-    const html = await new Promise<string>((resolve, reject) => {
-      epub.getChapter(item.id!, (err: Error | null, text?: string) => {
-        if (err || !text) return reject(err || new Error('Empty chapter'));
-        resolve(text);
-      });
-    }).catch(() => '');
-
-    const paragraphs = extractParagraphs(html);
-    const combinedText = normalizeText(
-      paragraphs.join(' ').trim() || cheerio.load(html).text(),
-    );
-
-    const chapterId = `c${i + 1}`;
-    const chapterFile = `chapters/${chapterId}.json`;
-    const chapterTitle = (item.title || "").trim();
-
-    if (isTocLike(chapterTitle, combinedText, paragraphs) || isCopyrightLike(chapterTitle, combinedText)) {
-      continue;
-    }
-
-    const wordCount = countWords(paragraphs);
-    totalWords += wordCount;
-
-    await fs.writeFile(
-      path.join(processedDir, chapterFile),
-      JSON.stringify({ id: chapterId, title: chapterTitle, paragraphs, wordCount }, null, 2),
-      'utf8',
-    );
-
-    chapters.push({ id: chapterId, title: chapterTitle, file: chapterFile, wordCount });
+  const coverFile = fb2.getCoverImage();
+  let coverPath: string | undefined;
+  if (coverFile) {
+    const rel = path.relative(tempAssetsDir, coverFile);
+    coverPath = `assets/${rel.replace(/\\/g, '/')}`;
   }
-
-  const manifest: BookManifest = {
-    id: bookId,
-    title,
-    author,
-    language,
-    wordCount: totalWords,
-    coverUrl: coverPath,
-    chapters,
-  };
-
-  await fs.writeFile(path.join(processedDir, 'book.json'), JSON.stringify(manifest, null, 2), 'utf8');
+  await fs.rename(tempAssetsDir, assetsDir);
+  if (typeof fb2.destroy === 'function') {
+    fb2.destroy();
+  }
 
   const s3 = new S3Client({
     endpoint: env.endpoint,
@@ -510,18 +352,18 @@ const uploadBookFromEpub = async (file: { buffer: Buffer; originalname: string }
   }
 
   const coverUrl = coverPath ? `${env.cdnBaseUrl}/${baseKey}/${coverPath}` : null;
-  const fileUrl = `${env.cdnBaseUrl}/${baseKey}/processed/book.json`;
+  const fileUrl = `${env.cdnBaseUrl}/${baseKey}/original/source.fb2`;
 
   const book = await prisma.readingBook.create({
     data: {
       id: bookId,
       title,
       author: author ?? null,
-      description: options.description?.trim() ?? null,
+      description: options.description?.trim() ?? metadata.description?.trim() ?? null,
       coverUrl,
       fileUrl,
       language,
-      wordCount: totalWords,
+      wordCount: null,
       isPublished: true,
     },
   });
@@ -542,5 +384,5 @@ export const readingService = {
   getProgress,
   getReaderPreferences,
   updateReaderPreferences,
-  uploadBookFromEpub,
+  uploadBookFromFb2,
 };
