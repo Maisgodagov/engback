@@ -330,7 +330,7 @@ const uploadBookFromFb2 = async (file: { buffer: Buffer; originalname: string },
   await ensureDir(tempAssetsDir);
 
   const initFb2File = await loadFb2Parser();
-  const fb2 = await initFb2File(new Uint8Array(file.buffer), tempAssetsDir);
+  const fb2 = await initFb2File(file.buffer, tempAssetsDir);
   const metadata = fb2.getMetadata();
   const title =
     options.title?.trim() ||
