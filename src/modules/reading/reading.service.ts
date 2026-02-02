@@ -259,6 +259,35 @@ const resolveAuthor = (metadata?: Fb2Metadata): string | undefined => {
   return undefined;
 };
 
+const looksLikeZip = (buffer: Buffer): boolean =>
+  buffer.length >= 2 && buffer[0] === 0x50 && buffer[1] === 0x4b;
+
+const stripLeadingBomAndWhitespace = (buffer: Buffer): Buffer => {
+  let start = 0;
+  if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+    start = 3;
+  }
+  while (start < buffer.length) {
+    const byte = buffer[start];
+    if (byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d || byte === 0x0c) {
+      start += 1;
+      continue;
+    }
+    break;
+  }
+  return start > 0 ? buffer.subarray(start) : buffer;
+};
+
+const ensureFb2Xml = (buffer: Buffer) => {
+  if (looksLikeZip(buffer)) {
+    throw new Error('Invalid FB2 file: looks like ZIP/EPUB. Please upload a .fb2 XML file.');
+  }
+  const cleaned = stripLeadingBomAndWhitespace(buffer);
+  if (!cleaned.length || cleaned[0] !== 0x3c) {
+    throw new Error('Invalid FB2 file: expected XML content. Please upload a .fb2 file.');
+  }
+};
+
 const loadFb2Parser = async () => {
   const mod = await import('@lingo-reader/fb2-parser');
   return mod.initFb2File;
@@ -295,6 +324,7 @@ const uploadBookFromFb2 = async (file: { buffer: Buffer; originalname: string },
   const safeName = file.originalname?.trim() || 'book.fb2';
   const inputPath = path.join(tmpBase, safeName);
   await fs.writeFile(inputPath, file.buffer);
+  ensureFb2Xml(file.buffer);
 
   const tempAssetsDir = path.join(tmpBase, 'assets-tmp');
   await ensureDir(tempAssetsDir);

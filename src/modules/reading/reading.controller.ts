@@ -65,7 +65,12 @@ export const uploadBook = async (req: Request, res: Response) => {
     res.status(201).json(book);
   } catch (err: any) {
     console.error('Failed to upload book', err);
-    res.status(500).json({ message: err?.message ?? 'Failed to upload book' });
+    const message = err?.message ?? 'Failed to upload book';
+    if (typeof message === 'string' && message.toLowerCase().includes('invalid fb2')) {
+      res.status(400).json({ message });
+      return;
+    }
+    res.status(500).json({ message });
   }
 };
 
