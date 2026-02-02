@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { initFb2File, type Fb2Metadata } from '@lingo-reader/fb2-parser';
+import type { Fb2Metadata } from '@lingo-reader/fb2-parser';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { prisma } from '../../shared/prisma/prismaClient';
 
@@ -259,6 +259,11 @@ const resolveAuthor = (metadata?: Fb2Metadata): string | undefined => {
   return undefined;
 };
 
+const loadFb2Parser = async () => {
+  const mod = await import('@lingo-reader/fb2-parser');
+  return mod.initFb2File;
+};
+
 const listFiles = async (dir: string): Promise<string[]> => {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   const results: string[] = [];
@@ -294,6 +299,7 @@ const uploadBookFromFb2 = async (file: { buffer: Buffer; originalname: string },
   const tempAssetsDir = path.join(tmpBase, 'assets-tmp');
   await ensureDir(tempAssetsDir);
 
+  const initFb2File = await loadFb2Parser();
   const fb2 = await initFb2File(new Uint8Array(file.buffer), tempAssetsDir);
   const metadata = fb2.getMetadata();
   const title =
