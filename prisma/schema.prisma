@@ -564,6 +564,7 @@ model ReadingBook {
   coverUrl    String?  @map("cover_url") @db.VarChar(512)
   fileUrl     String   @map("file_url") @db.VarChar(512)
   language    String   @default("en") @db.VarChar(16)
+  cefrLevel   String?  @map("cefr_level") @db.VarChar(8)
   wordCount   Int?     @map("word_count")
   isPublished Boolean  @default(true) @map("is_published")
   createdAt   DateTime @default(now()) @map("created_at")

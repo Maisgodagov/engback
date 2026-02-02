@@ -14,6 +14,7 @@ type ListBooksResult = Array<{
   coverUrl: string | null;
   fileUrl: string;
   language: string;
+  cefrLevel: string | null;
   wordCount: number | null;
   isPublished: boolean;
   createdAt: Date;
@@ -31,6 +32,7 @@ type UploadOptions = {
   author?: string;
   description?: string;
   language?: string;
+  cefrLevel?: string | null;
 };
 
 const listBooks = async (userId?: string | null): Promise<ListBooksResult> => {
@@ -93,6 +95,7 @@ const createBook = async (payload: {
   coverUrl?: string | null;
   fileUrl: string;
   language?: string;
+  cefrLevel?: string | null;
   wordCount?: number;
   isPublished?: boolean;
 }) => {
@@ -105,6 +108,7 @@ const createBook = async (payload: {
       coverUrl: payload.coverUrl ?? null,
       fileUrl: payload.fileUrl,
       language: payload.language ?? 'en',
+      cefrLevel: payload.cefrLevel ?? null,
       wordCount: payload.wordCount ?? null,
       isPublished: payload.isPublished ?? true,
     },
@@ -113,7 +117,7 @@ const createBook = async (payload: {
 
 const updateBook = async (
   bookId: string,
-  payload: { title?: string; author?: string | null; description?: string | null },
+  payload: { title?: string; author?: string | null; description?: string | null; cefrLevel?: string | null },
 ) => {
   return prisma.readingBook.update({
     where: { id: bookId },
@@ -121,6 +125,7 @@ const updateBook = async (
       ...(payload.title !== undefined ? { title: payload.title } : {}),
       ...(payload.author !== undefined ? { author: payload.author } : {}),
       ...(payload.description !== undefined ? { description: payload.description } : {}),
+      ...(payload.cefrLevel !== undefined ? { cefrLevel: payload.cefrLevel } : {}),
     },
   });
 };
@@ -363,6 +368,7 @@ const uploadBookFromFb2 = async (file: { buffer: Buffer; originalname: string },
       coverUrl,
       fileUrl,
       language,
+      cefrLevel: options.cefrLevel ?? null,
       wordCount: null,
       isPublished: true,
     },
