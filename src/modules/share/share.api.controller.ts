@@ -95,6 +95,8 @@ const telegramApi = async (method: string, payload: Record<string, unknown>) => 
   return data;
 };
 
+const isDirectVideoUrl = (url: string) => /\.(mp4|mov|m4v)(\?|#|$)/i.test(url);
+
 export const sendWordShare = async (req: Request, res: Response) => {
   try {
     const body = req.body as Partial<ShareRequestBody>;
@@ -155,6 +157,10 @@ export const sendWordShare = async (req: Request, res: Response) => {
       } catch {
         // ignore snippet errors
       }
+    }
+    if (videoUrl && !isDirectVideoUrl(videoUrl)) {
+      console.log("[share] skip sendVideo: not a direct mp4", { videoUrl });
+      videoUrl = "";
     }
 
     const caption = buildCaption(word, translation, extraTranslations, synonyms);
