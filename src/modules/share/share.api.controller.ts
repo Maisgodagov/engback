@@ -51,15 +51,17 @@ const buildCaption = (
 ) => {
   const lines: string[] = [];
   const safeTranslation = translation || "слово";
-  lines.push(`🇬🇧 *${word}* — 🇷🇺 *${safeTranslation}*`);
+  lines.push(
+    `🇬🇧 <b>${word}</b> — 🇷🇺 <b>${safeTranslation}</b>`,
+  );
   if (extraTranslations.length || synonyms.length) {
     lines.push("");
   }
   if (extraTranslations.length) {
-    lines.push(`*Другие переводы:* _${extraTranslations.join(", ")}_`);
+    lines.push(`<b>Другие переводы:</b> <i>${extraTranslations.join(", ")}</i>`);
   }
   if (synonyms.length) {
-    lines.push(`*Синонимы:* _${synonyms.join(", ")}_`);
+    lines.push(`<b>Синонимы:</b> <i>${synonyms.join(", ")}</i>`);
   }
   if (exampleText) {
     const safeIndex =
@@ -72,13 +74,10 @@ const buildCaption = (
         : 30;
     lines.push("");
     lines.push(`Пример использования из видео (${safeIndex}/${safeTotal}):`);
-    lines.push(`> "${exampleText}"`);
+    lines.push(`<blockquote>"${exampleText}"</blockquote>`);
   }
   return lines.join("\n");
 };
-
-const escapeMarkdown = (value: string) =>
-  value.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
 
 const highlightWord = (text: string, word: string) => {
   const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -89,14 +88,14 @@ const highlightWord = (text: string, word: string) => {
   while ((match = regex.exec(text)) !== null) {
     const before = text.slice(lastIndex, match.index);
     if (before) {
-      parts.push(escapeMarkdown(before));
+      parts.push(escapeHtml(before));
     }
-    parts.push(`__*${escapeMarkdown(match[0])}*__`);
+    parts.push(`<u><b>${escapeHtml(match[0])}</b></u>`);
     lastIndex = match.index + match[0].length;
   }
   const rest = text.slice(lastIndex);
   if (rest) {
-    parts.push(escapeMarkdown(rest));
+    parts.push(escapeHtml(rest));
   }
   return parts.join("");
 };
@@ -301,7 +300,7 @@ const sendTelegramVideoFile = async (
   const form = new FormDataCtor();
   form.append("chat_id", chatId);
   form.append("caption", caption);
-  form.append("parse_mode", "MarkdownV2");
+  form.append("parse_mode", "HTML");
   form.append("supports_streaming", "true");
   form.append("reply_markup", JSON.stringify(replyMarkup));
   const blob = new Blob([fileBuffer], { type: "video/mp4" });
@@ -479,10 +478,10 @@ export const sendWordShare = async (req: Request, res: Response) => {
     const highlightedExample = rawExample ? highlightWord(rawExample, word) : "";
 
     const caption = buildCaption(
-      escapeMarkdown(word.toUpperCase()),
-      escapeMarkdown((translation || "слово").toUpperCase()),
-      extraTranslations.map(escapeMarkdown),
-      synonyms.map(escapeMarkdown),
+      escapeHtml(word.toUpperCase()),
+      escapeHtml((translation || "слово").toUpperCase()),
+      extraTranslations.map(escapeHtml),
+      synonyms.map(escapeHtml),
       highlightedExample,
       body.exampleIndex,
       body.examplesTotal,
@@ -530,7 +529,7 @@ export const sendWordShare = async (req: Request, res: Response) => {
         chat_id: telegram.id,
         video: videoUrl,
         caption,
-        parse_mode: "MarkdownV2",
+        parse_mode: "HTML",
         supports_streaming: true,
         reply_markup: replyMarkup,
       });
@@ -567,7 +566,7 @@ export const sendWordShare = async (req: Request, res: Response) => {
       await telegramApi("sendMessage", {
         chat_id: telegram.id,
         text: caption,
-        parse_mode: "MarkdownV2",
+        parse_mode: "HTML",
         reply_markup: replyMarkup,
       });
       res.json({ ok: true, mode: "text" });
