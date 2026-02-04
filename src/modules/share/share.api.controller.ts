@@ -63,6 +63,12 @@ const telegramApi = async (method: string, payload: Record<string, unknown>) => 
   if (!TELEGRAM_BOT_TOKEN) {
     throw Object.assign(new Error("Missing TELEGRAM_BOT_TOKEN"), { status: 500 });
   }
+  console.log(`[share] telegramApi request ${method}`, {
+    chat_id: payload.chat_id,
+    hasVideo: Boolean((payload as any).video),
+    hasCaption: Boolean((payload as any).caption),
+    hasReplyMarkup: Boolean((payload as any).reply_markup),
+  });
   const response = await fetch(
     `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`,
     {
@@ -74,6 +80,11 @@ const telegramApi = async (method: string, payload: Record<string, unknown>) => 
   const data = (await response.json().catch(() => null)) as
     | { ok?: boolean; description?: string }
     | null;
+  console.log(`[share] telegramApi response ${method}`, {
+    status: response.status,
+    ok: data?.ok,
+    description: data?.description,
+  });
   if (!response.ok || !data?.ok) {
     const description =
       typeof data?.description === "string"
@@ -89,6 +100,16 @@ export const sendWordShare = async (req: Request, res: Response) => {
     const body = req.body as Partial<ShareRequestBody>;
     const initData = typeof body.initData === "string" ? body.initData : "";
     const word = typeof body.word === "string" ? body.word.trim() : "";
+    console.log("[share] sendWordShare request", {
+      hasInitData: Boolean(initData),
+      word,
+      translation: body.translation,
+      extraTranslationsCount: Array.isArray(body.extraTranslations)
+        ? body.extraTranslations.length
+        : 0,
+      synonymsCount: Array.isArray(body.synonyms) ? body.synonyms.length : 0,
+      videoUrl: body.videoUrl,
+    });
     if (!initData || !word) {
       res.status(400).json({ message: "Missing initData or word" });
       return;
@@ -138,6 +159,13 @@ export const sendWordShare = async (req: Request, res: Response) => {
 
     const caption = buildCaption(word, translation, extraTranslations, synonyms);
     const webAppUrl = buildWebAppUrl(word);
+    console.log("[share] prepared payload", {
+      chatId: telegram.id,
+      captionLength: caption.length,
+      webAppUrl,
+      useWebAppButton: TELEGRAM_USE_WEB_APP_BUTTON,
+      shortName: TELEGRAM_WEBAPP_SHORT_NAME,
+    });
 
     const replyMarkup = TELEGRAM_USE_WEB_APP_BUTTON
       ? {
@@ -179,6 +207,10 @@ export const sendWordShare = async (req: Request, res: Response) => {
 
     res.json({ ok: true });
   } catch (error: any) {
+    console.error("[share] sendWordShare error", {
+      message: error?.message,
+      status: error?.status,
+    });
     const status = Number(error?.status ?? 500);
     res.status(status).json({ message: error?.message ?? "Share failed" });
   }
