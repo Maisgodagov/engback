@@ -13,7 +13,7 @@ const createTokens = (user: UserProfileDto): AuthTokens => ({
   refreshToken: `refresh-${user.id}`,
 });
 
-const parseTelegramInitData = (initData: string) => {
+export const parseTelegramInitData = (initData: string) => {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!botToken) {
     throw Object.assign(new Error('Missing TELEGRAM_BOT_TOKEN'), { status: 500 });

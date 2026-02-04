@@ -16,6 +16,8 @@ import { muellerRouter } from '../modules/mueller/mueller.router';
 import { gameSnippetsRouter } from '../modules/game-snippets/gameSnippets.router';
 import { publicGameSnippetsRouter } from '../modules/game-snippets/publicGameSnippets.router';
 import { readingRouter } from '../modules/reading/reading.router';
+import { shareRouter } from '../modules/share/share.router';
+import { shareApiRouter } from '../modules/share/share.api.router';
 
 export const createApp = () => {
   const app = express();
@@ -71,6 +73,8 @@ export const createApp = () => {
   app.use('/api/admin/game-snippets', gameSnippetsRouter);
   app.use('/api/game-snippets', publicGameSnippetsRouter);
   app.use('/api/reading', readingRouter);
+  app.use('/api/share', shareApiRouter);
+  app.use('/share', shareRouter);
   
   app.use(errorHandler);
 

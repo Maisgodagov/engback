@@ -4,9 +4,9 @@ import { Resvg } from "@resvg/resvg-js";
 import { muellerService } from "../mueller/mueller.service";
 import { videoLearningService } from "../video-learning/videoLearning.service";
 
-const APP_PUBLIC_URL = process.env.APP_PUBLIC_URL ?? "https://app.slothary.ru";
 const API_PUBLIC_URL = process.env.API_PUBLIC_URL ?? "https://api.slothary.ru";
-const TELEGRAM_BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME ?? "slothary_bot";
+const TELEGRAM_BOT_USERNAME =
+  process.env.TELEGRAM_BOT_USERNAME ?? "slothary_bot";
 
 const escapeHtml = (value: string) =>
   value
@@ -24,7 +24,10 @@ const decodeWordParam = (value: string) => {
   }
 };
 
-const pickTranslation = (candidate?: string | null, fallback?: string | null) => {
+const pickTranslation = (
+  candidate?: string | null,
+  fallback?: string | null,
+) => {
   if (candidate && candidate.trim()) return candidate.trim();
   if (fallback && fallback.trim()) return fallback.trim();
   return "";
@@ -32,35 +35,53 @@ const pickTranslation = (candidate?: string | null, fallback?: string | null) =>
 
 const buildOgDescription = (translation: string, synonyms: string[]) => {
   const parts: string[] = [];
-  if (translation) parts.push(`???????: ${translation}`);
-  if (synonyms.length) parts.push(`????????: ${synonyms.join(", ")}`);
-  return parts.length ? parts.join(" ? ") : "???????? ????? ? Slothary.";
+  if (translation) parts.push(`Translation: ${translation}`);
+  if (synonyms.length) parts.push(`Synonyms: ${synonyms.join(", ")}`);
+  return parts.length ? parts.join(" · ") : "Word card in Slothary.";
 };
 
-const buildImageUrl = (word: string, translation: string, synonyms: string[]) => {
+const buildImageUrl = (
+  word: string,
+  translation: string,
+  synonyms: string[],
+) => {
   const params = new URLSearchParams();
   if (translation) params.set("translation", translation);
   if (synonyms.length) params.set("synonyms", synonyms.join(","));
   const query = params.toString();
-  return `${API_PUBLIC_URL}/share/word/${encodeURIComponent(word)}/image.png${query ? `?${query}` : ""}`;
+  return `${API_PUBLIC_URL}/share/word/${encodeURIComponent(
+    word,
+  )}/image.png${query ? `?${query}` : ""}`;
 };
 
 const buildShareUrl = (word: string, translation: string) => {
   const params = new URLSearchParams();
   if (translation) params.set("translation", translation);
   const query = params.toString();
-  return `${API_PUBLIC_URL}/share/word/${encodeURIComponent(word)}${query ? `?${query}` : ""}`;
+  return `${API_PUBLIC_URL}/share/word/${encodeURIComponent(word)}${
+    query ? `?${query}` : ""
+  }`;
 };
 
 const buildBotLink = (word: string) => {
   const payload = `word_${word.toLowerCase().slice(0, 48)}`;
-  return `https://t.me/${TELEGRAM_BOT_USERNAME}?start=${encodeURIComponent(payload)}`;
+  return `https://t.me/${TELEGRAM_BOT_USERNAME}?start=${encodeURIComponent(
+    payload,
+  )}`;
 };
 
-const buildVideoUrl = (baseUrl: string, startSeconds?: number, endSeconds?: number) => {
+const buildVideoUrl = (
+  baseUrl: string,
+  startSeconds?: number,
+  endSeconds?: number,
+) => {
   if (!startSeconds && !endSeconds) return baseUrl;
-  const start = typeof startSeconds === "number" ? Math.max(0, startSeconds) : 0;
-  const end = typeof endSeconds === "number" ? Math.max(start, endSeconds) : undefined;
+  const start =
+    typeof startSeconds === "number" ? Math.max(0, startSeconds) : 0;
+  const end =
+    typeof endSeconds === "number"
+      ? Math.max(start, endSeconds)
+      : undefined;
   if (end !== undefined) {
     return `${baseUrl}#t=${start.toFixed(2)},${end.toFixed(2)}`;
   }
@@ -75,21 +96,34 @@ export const renderWordShare = async (req: Request, res: Response) => {
     return;
   }
 
-  const translationOverride = typeof req.query.translation === "string" ? req.query.translation : "";
+  const translationOverride =
+    typeof req.query.translation === "string" ? req.query.translation : "";
 
   const entries = await muellerService.lookup(normalizedWord, "en");
   const primary = entries[0];
   const primaryWord = primary?.word?.trim() || normalizedWord;
-  const translations = (primary?.translations ?? []).filter((value) => value && value.trim());
+  const translations = (primary?.translations ?? []).filter(
+    (value) => value && value.trim(),
+  );
   const translation = pickTranslation(translationOverride, translations[0] ?? "");
   const synonyms = (primary?.synonyms ?? [])
     .filter((value) => value && value.trim())
     .filter((value) => value.toLowerCase() !== primaryWord.toLowerCase())
     .slice(0, 4);
 
-  let snippet: null | { videoUrl: string; startSeconds?: number; endSeconds?: number } = null;
+  let snippet: null | {
+    videoUrl: string;
+    startSeconds?: number;
+    endSeconds?: number;
+  } = null;
   try {
-    const snippetResult = await videoLearningService.searchPhrase(primaryWord, 1, 1, undefined, 1);
+    const snippetResult = await videoLearningService.searchPhrase(
+      primaryWord,
+      1,
+      1,
+      undefined,
+      1,
+    );
     const first = snippetResult.items?.[0];
     if (first?.videoUrl) {
       snippet = {
@@ -104,13 +138,15 @@ export const renderWordShare = async (req: Request, res: Response) => {
 
   const shareUrl = buildShareUrl(primaryWord, translation);
   const imageUrl = buildImageUrl(primaryWord, translation, synonyms);
-  const ogTitle = `${primaryWord} ? ${translation || "?????"}`;
+  const ogTitle = `${primaryWord} - ${translation || "word"}`;
   const ogDescription = buildOgDescription(translation, synonyms);
-  const videoUrl = snippet ? buildVideoUrl(snippet.videoUrl, snippet.startSeconds, snippet.endSeconds) : "";
+  const videoUrl = snippet
+    ? buildVideoUrl(snippet.videoUrl, snippet.startSeconds, snippet.endSeconds)
+    : "";
   const botLink = buildBotLink(primaryWord);
 
   const html = `<!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -149,12 +185,30 @@ ${videoUrl ? `<meta property="og:video" content="${escapeHtml(videoUrl)}" />
 <body>
   <div class="wrap">
     <div class="card">
-      <div class="title">${escapeHtml(primaryWord)}${translation ? ` <span>? ${escapeHtml(translation)}</span>` : ""}</div>
-      ${translations.length > 1 ? `<div class="meta">${escapeHtml(translations.slice(1, 5).join(", "))}</div>` : ""}
-      ${synonyms.length ? `<div class="syn"><strong>????????:</strong> ${escapeHtml(synonyms.join(", "))}</div>` : ""}
-      ${videoUrl ? `<div class="video"><video controls playsinline preload="metadata" src="${escapeHtml(videoUrl)}"></video></div>` : ""}
-      <a class="cta" href="${escapeHtml(botLink)}">???????? ???</a>
-      <div class="note">???????? ????, ????? ??????? ?????? ???????? ? ??????????.</div>
+      <div class="title">${escapeHtml(primaryWord)}${
+        translation ? ` <span>- ${escapeHtml(translation)}</span>` : ""
+      }</div>
+      ${
+        translations.length > 1
+          ? `<div class="meta">${escapeHtml(translations.slice(1, 5).join(", "))}</div>`
+          : ""
+      }
+      ${
+        synonyms.length
+          ? `<div class="syn"><strong>synonyms:</strong> ${escapeHtml(
+              synonyms.join(", "),
+            )}</div>`
+          : ""
+      }
+      ${
+        videoUrl
+          ? `<div class="video"><video controls playsinline preload="metadata" src="${escapeHtml(
+              videoUrl,
+            )}"></video></div>`
+          : ""
+      }
+      <a class="cta" href="${escapeHtml(botLink)}">See more</a>
+      <div class="note">Open the bot to see more examples and practice.</div>
     </div>
   </div>
 </body>
@@ -167,8 +221,10 @@ ${videoUrl ? `<meta property="og:video" content="${escapeHtml(videoUrl)}" />
 export const renderWordShareImage = (req: Request, res: Response) => {
   const rawWord = decodeWordParam(req.params.word ?? "");
   const word = rawWord.trim() || "word";
-  const translation = typeof req.query.translation === "string" ? req.query.translation : "";
-  const rawSynonyms = typeof req.query.synonyms === "string" ? req.query.synonyms : "";
+  const translation =
+    typeof req.query.translation === "string" ? req.query.translation : "";
+  const rawSynonyms =
+    typeof req.query.synonyms === "string" ? req.query.synonyms : "";
   const synonyms = rawSynonyms
     .split(",")
     .map((value) => value.trim())
@@ -176,8 +232,10 @@ export const renderWordShareImage = (req: Request, res: Response) => {
     .slice(0, 4);
 
   const title = escapeHtml(word.toLowerCase());
-  const translationText = translation ? escapeHtml(translation) : "?????";
-  const synonymsText = synonyms.length ? escapeHtml(synonyms.join(", ")) : "??????????? ??????";
+  const translationText = translation ? escapeHtml(translation) : "word";
+  const synonymsText = synonyms.length
+    ? escapeHtml(synonyms.join(", "))
+    : "Video example inside";
 
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
@@ -190,9 +248,9 @@ export const renderWordShareImage = (req: Request, res: Response) => {
   <rect width="1200" height="630" rx="48" fill="url(#bg)" />
   <rect x="70" y="70" width="1060" height="490" rx="36" fill="#171a27" />
   <text x="120" y="200" font-size="64" font-family="Arial, sans-serif" font-weight="700" fill="#f5f7ff">${title}</text>
-  <text x="120" y="270" font-size="36" font-family="Arial, sans-serif" font-weight="400" fill="#c1c7d6">? ${translationText}</text>
+  <text x="120" y="270" font-size="36" font-family="Arial, sans-serif" font-weight="400" fill="#c1c7d6">- ${translationText}</text>
   <text x="120" y="340" font-size="28" font-family="Arial, sans-serif" font-weight="400" fill="#c1c7d6">${synonymsText}</text>
-  <text x="120" y="460" font-size="22" font-family="Arial, sans-serif" font-weight="600" fill="#6dd3ff">Slothary ? Watch video examples</text>
+  <text x="120" y="460" font-size="22" font-family="Arial, sans-serif" font-weight="600" fill="#6dd3ff">Slothary · Watch video examples</text>
 </svg>`;
 
   const resvg = new Resvg(svg, {
