@@ -5,6 +5,12 @@ import { muellerService } from "../mueller/mueller.service";
 import { videoLearningService } from "../video-learning/videoLearning.service";
 
 const APP_PUBLIC_URL = process.env.APP_PUBLIC_URL ?? "https://app.slothary.ru";
+const TELEGRAM_BOT_USERNAME =
+  process.env.TELEGRAM_BOT_USERNAME ?? "slothary_bot";
+const TELEGRAM_WEBAPP_SHORT_NAME =
+  process.env.TELEGRAM_WEBAPP_SHORT_NAME ?? "";
+const TELEGRAM_USE_WEB_APP_BUTTON =
+  process.env.TELEGRAM_USE_WEB_APP_BUTTON === "true";
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 
 type ShareRequestBody = {
@@ -44,10 +50,12 @@ const buildCaption = (
 
 const buildWebAppUrl = (word: string) => {
   const payload = `word_${word.toLowerCase().slice(0, 48)}`;
-  const params = new URLSearchParams({
-    startapp: payload,
-    word: word.toLowerCase(),
-  });
+  if (TELEGRAM_WEBAPP_SHORT_NAME) {
+    return `https://t.me/${TELEGRAM_BOT_USERNAME}/${TELEGRAM_WEBAPP_SHORT_NAME}?startapp=${encodeURIComponent(
+      payload,
+    )}`;
+  }
+  const params = new URLSearchParams({ startapp: payload, word: word.toLowerCase() });
   return `${APP_PUBLIC_URL}/?${params.toString()}`;
 };
 
@@ -131,16 +139,27 @@ export const sendWordShare = async (req: Request, res: Response) => {
     const caption = buildCaption(word, translation, extraTranslations, synonyms);
     const webAppUrl = buildWebAppUrl(word);
 
-    const replyMarkup = {
-      inline_keyboard: [
-        [
-          {
-            text: "Open Slothary",
-            web_app: { url: webAppUrl },
-          },
-        ],
-      ],
-    };
+    const replyMarkup = TELEGRAM_USE_WEB_APP_BUTTON
+      ? {
+          inline_keyboard: [
+            [
+              {
+                text: "Open Slothary",
+                web_app: { url: webAppUrl },
+              },
+            ],
+          ],
+        }
+      : {
+          inline_keyboard: [
+            [
+              {
+                text: "Open Slothary",
+                url: webAppUrl,
+              },
+            ],
+          ],
+        };
 
     if (videoUrl) {
       await telegramApi("sendVideo", {
