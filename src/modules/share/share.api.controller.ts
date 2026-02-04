@@ -44,12 +44,17 @@ const buildCaption = (
   synonyms: string[],
 ) => {
   const lines: string[] = [];
-  lines.push(`${word} - ${translation || "word"}`);
+  const safeTranslation = translation || "слово";
+  lines.push(`🇬🇧 *${word}*`);
+  lines.push(`🇷🇺 *${safeTranslation}*`);
+  if (extraTranslations.length || synonyms.length) {
+    lines.push("");
+  }
   if (extraTranslations.length) {
-    lines.push(`Other: ${extraTranslations.join(", ")}`);
+    lines.push(`Другие переводы: ${extraTranslations.join(", ")}`);
   }
   if (synonyms.length) {
-    lines.push(`Synonyms: ${synonyms.join(", ")}`);
+    lines.push(`Синонимы: ${synonyms.join(", ")}`);
   }
   return lines.join("\n");
 };
@@ -207,7 +212,12 @@ const generateVideoNoteClip = async (
     "veryfast",
     "-crf",
     "28",
-    "-an",
+    "-c:a",
+    "aac",
+    "-ar",
+    "44100",
+    "-b:a",
+    "128k",
     "-movflags",
     "+faststart",
     "-f",
@@ -249,6 +259,7 @@ const sendTelegramVideoFile = async (
   const form = new FormDataCtor();
   form.append("chat_id", chatId);
   form.append("caption", caption);
+  form.append("parse_mode", "Markdown");
   form.append("supports_streaming", "true");
   form.append("reply_markup", JSON.stringify(replyMarkup));
   const blob = new Blob([fileBuffer], { type: "video/mp4" });
@@ -458,6 +469,7 @@ export const sendWordShare = async (req: Request, res: Response) => {
         chat_id: telegram.id,
         video: videoUrl,
         caption,
+        parse_mode: "Markdown",
         supports_streaming: true,
         reply_markup: replyMarkup,
       });
@@ -472,13 +484,13 @@ export const sendWordShare = async (req: Request, res: Response) => {
           startSeconds,
           endSeconds,
         });
-        const noteBuffer = await generateVideoNoteClip(
+        const buffer = await generateMp4Clip(
           videoUrl,
           startSeconds,
           endSeconds,
         );
-        await sendTelegramVideoNoteFile(telegram.id, replyMarkup, noteBuffer);
-        res.json({ ok: true, mode: "video-note" });
+        await sendTelegramVideoFile(telegram.id, caption, replyMarkup, buffer);
+        res.json({ ok: true, mode: "video-clip" });
         return;
       } catch (clipError: any) {
         console.error("[share] clip generation failed", {
@@ -494,6 +506,7 @@ export const sendWordShare = async (req: Request, res: Response) => {
       await telegramApi("sendMessage", {
         chat_id: telegram.id,
         text: caption,
+        parse_mode: "Markdown",
         reply_markup: replyMarkup,
       });
       res.json({ ok: true, mode: "text" });
