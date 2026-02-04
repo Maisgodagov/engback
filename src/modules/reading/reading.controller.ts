@@ -54,24 +54,10 @@ export const createBook = async (req: Request, res: Response) => {
 
 export const uploadBook = async (req: Request, res: Response) => {
   if (!requireAdmin(req, res)) return;
-  const payload = uploadBookSchema.parse(req.body ?? {});
-  const file = (req as any).file as { buffer: Buffer; originalname: string } | undefined;
-  if (!file) {
-    res.status(400).json({ message: 'Missing fb2 file' });
-    return;
-  }
-  try {
-    const book = await readingService.uploadBookFromFb2(file, payload);
-    res.status(201).json(book);
-  } catch (err: any) {
-    console.error('Failed to upload book', err);
-    const message = err?.message ?? 'Failed to upload book';
-    if (typeof message === 'string' && message.toLowerCase().includes('invalid fb2')) {
-      res.status(400).json({ message });
-      return;
-    }
-    res.status(500).json({ message });
-  }
+  res.status(503).json({
+    message: 'Book upload is disabled on this backend. Use the upload service.',
+  });
+  return;
 };
 
 export const updateBook = async (req: Request, res: Response) => {
