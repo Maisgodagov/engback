@@ -40,44 +40,13 @@ const safeList = (value?: unknown): string[] => {
     .filter(Boolean);
 };
 
-const buildCaption = (
-  word: string,
-  translation: string,
-  extraTranslations: string[],
-  synonyms: string[],
-  exampleText?: string,
-  exampleIndex?: number,
-  examplesTotal?: number,
-) => {
-  const lines: string[] = [];
-  const safeTranslation = translation || "слово";
-  lines.push(
-    `🇬🇧 <b>${word}</b> — 🇷🇺 <b>${safeTranslation}</b>`,
-  );
-  if (extraTranslations.length || synonyms.length) {
-    lines.push("");
-  }
-  if (extraTranslations.length) {
-    lines.push(`<b>Другие переводы:</b> <i>${extraTranslations.join(", ")}</i>`);
-  }
-  if (synonyms.length) {
-    lines.push(`<b>Синонимы:</b> <i>${synonyms.join(", ")}</i>`);
-  }
-  if (exampleText) {
-    const safeIndex =
-      typeof exampleIndex === "number" && exampleIndex > 0
-        ? exampleIndex
-        : 1;
-    const safeTotal =
-      typeof examplesTotal === "number" && examplesTotal > 0
-        ? examplesTotal
-        : 30;
-    lines.push("");
-    lines.push(`Пример использования из видео (${safeIndex}/${safeTotal}):`);
-    lines.push(`<blockquote>"${exampleText}"</blockquote>`);
-  }
-  return lines.join("\n");
-};
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
 const highlightWord = (text: string, word: string) => {
   const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -98,6 +67,43 @@ const highlightWord = (text: string, word: string) => {
     parts.push(escapeHtml(rest));
   }
   return parts.join("");
+};
+
+const buildCaption = (
+  word: string,
+  translation: string,
+  extraTranslations: string[],
+  synonyms: string[],
+  exampleText?: string,
+  exampleIndex?: number,
+  examplesTotal?: number,
+) => {
+  const lines: string[] = [];
+  const safeTranslation = translation || "слово";
+  lines.push(`🇬🇧 <b>${word}</b> — 🇷🇺 <b>${safeTranslation}</b>`);
+  if (extraTranslations.length || synonyms.length) {
+    lines.push("");
+  }
+  if (extraTranslations.length) {
+    lines.push(`<b>Другие переводы:</b> <i>${extraTranslations.join(", ")}</i>`);
+  }
+  if (synonyms.length) {
+    lines.push(`<b>Синонимы:</b> <i>${synonyms.join(", ")}</i>`);
+  }
+  if (exampleText) {
+    const safeIndex =
+      typeof exampleIndex === "number" && exampleIndex > 0
+        ? exampleIndex
+        : 1;
+    const safeTotal =
+      typeof examplesTotal === "number" && examplesTotal > 0
+        ? examplesTotal
+        : 30;
+    lines.push("");
+    lines.push(`Пример использования из видео (${safeIndex}/${safeTotal}):`);
+    lines.push(`"${exampleText}"`);
+  }
+  return lines.join("\n");
 };
 
 const buildWebAppUrl = (word: string) => {
