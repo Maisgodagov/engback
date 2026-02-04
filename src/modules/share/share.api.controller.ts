@@ -170,6 +170,67 @@ const generateMp4Clip = async (sourceUrl: string, start?: number, end?: number) 
   return buffer;
 };
 
+const generateVideoNoteClip = async (
+  sourceUrl: string,
+  start?: number,
+  end?: number,
+) => {
+  const safeStart = formatSeconds(start);
+  const safeEnd = formatSeconds(end);
+  const duration = Math.max(1, Math.min(6, safeEnd > safeStart ? safeEnd - safeStart : 4));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "slothary-note-"));
+  const outputPath = path.join(tmpDir, `note-${Date.now()}.mp4`);
+
+  const args = [
+    "-y",
+    "-protocol_whitelist",
+    "file,crypto,data,https,tcp,tls",
+    "-user_agent",
+    "Mozilla/5.0",
+    "-i",
+    sourceUrl,
+    "-ss",
+    safeStart.toFixed(2),
+    "-t",
+    duration.toFixed(2),
+    "-vf",
+    "scale='min(iw,ih)':-1,crop='min(iw,ih)':'min(iw,ih)',scale=512:512",
+    "-c:v",
+    "libx264",
+    "-profile:v",
+    "baseline",
+    "-level",
+    "3.0",
+    "-pix_fmt",
+    "yuv420p",
+    "-preset",
+    "veryfast",
+    "-crf",
+    "28",
+    "-an",
+    "-movflags",
+    "+faststart",
+    "-f",
+    "mp4",
+    outputPath,
+  ];
+
+  const { stderr } = await execFileAsync("ffmpeg", args, {
+    timeout: 60_000,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  if (stderr) {
+    console.log("[share] ffmpeg note stderr", stderr.slice(0, 2000));
+  }
+  const stat = await fs.stat(outputPath);
+  if (!stat.size || stat.size < 50_000) {
+    throw new Error(`Generated video note is too small (${stat.size} bytes)`);
+  }
+  const buffer = await fs.readFile(outputPath);
+  await fs.rm(tmpDir, { recursive: true, force: true });
+  return buffer;
+};
+
 const sendTelegramVideoFile = async (
   chatId: string,
   caption: string,
@@ -204,6 +265,50 @@ const sendTelegramVideoFile = async (
     | { ok?: boolean; description?: string }
     | null;
   console.log("[share] telegramApi response sendVideo(file)", {
+    status: response.status,
+    ok: data?.ok,
+    description: data?.description,
+  });
+  if (!response.ok || !data?.ok) {
+    const description =
+      typeof data?.description === "string"
+        ? data.description
+        : `Telegram API error: ${response.status}`;
+    throw Object.assign(new Error(description), { status: 502 });
+  }
+};
+
+const sendTelegramVideoNoteFile = async (
+  chatId: string,
+  replyMarkup: Record<string, unknown>,
+  fileBuffer: Buffer,
+) => {
+  if (!TELEGRAM_BOT_TOKEN) {
+    throw Object.assign(new Error("Missing TELEGRAM_BOT_TOKEN"), { status: 500 });
+  }
+  const FormDataCtor = (globalThis as any).FormData;
+  if (!FormDataCtor) {
+    throw Object.assign(new Error("FormData is not available in this Node runtime"), {
+      status: 500,
+    });
+  }
+  const form = new FormDataCtor();
+  form.append("chat_id", chatId);
+  form.append("reply_markup", JSON.stringify(replyMarkup));
+  const blob = new Blob([fileBuffer], { type: "video/mp4" });
+  form.append("video_note", blob, "note.mp4");
+
+  const response = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideoNote`,
+    {
+      method: "POST",
+      body: form,
+    },
+  );
+  const data = (await response.json().catch(() => null)) as
+    | { ok?: boolean; description?: string }
+    | null;
+  console.log("[share] telegramApi response sendVideoNote(file)", {
     status: response.status,
     ok: data?.ok,
     description: data?.description,
@@ -367,9 +472,13 @@ export const sendWordShare = async (req: Request, res: Response) => {
           startSeconds,
           endSeconds,
         });
-        const buffer = await generateMp4Clip(videoUrl, startSeconds, endSeconds);
-        await sendTelegramVideoFile(telegram.id, caption, replyMarkup, buffer);
-        res.json({ ok: true, mode: "video-clip" });
+        const noteBuffer = await generateVideoNoteClip(
+          videoUrl,
+          startSeconds,
+          endSeconds,
+        );
+        await sendTelegramVideoNoteFile(telegram.id, replyMarkup, noteBuffer);
+        res.json({ ok: true, mode: "video-note" });
         return;
       } catch (clipError: any) {
         console.error("[share] clip generation failed", {
