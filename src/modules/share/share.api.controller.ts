@@ -29,6 +29,8 @@ type ShareRequestBody = {
   startSeconds?: number;
   endSeconds?: number;
   exampleText?: string;
+  exampleIndex?: number;
+  examplesTotal?: number;
 };
 
 const safeList = (value?: unknown): string[] => {
@@ -44,33 +46,59 @@ const buildCaption = (
   extraTranslations: string[],
   synonyms: string[],
   exampleText?: string,
+  exampleIndex?: number,
+  examplesTotal?: number,
 ) => {
   const lines: string[] = [];
   const safeTranslation = translation || "слово";
-  lines.push(`🇬🇧 *${word}*  —  🇷🇺 *${safeTranslation}*`);
+  lines.push(`🇬🇧 *${word}* — 🇷🇺 *${safeTranslation}*`);
   if (extraTranslations.length || synonyms.length) {
     lines.push("");
   }
   if (extraTranslations.length) {
-    lines.push(`Другие переводы: ${extraTranslations.join(", ")}`);
+    lines.push(`*Другие переводы:* _${extraTranslations.join(", ")}_`);
   }
   if (synonyms.length) {
-    lines.push(`Синонимы: ${synonyms.join(", ")}`);
+    lines.push(`*Синонимы:* _${synonyms.join(", ")}_`);
   }
   if (exampleText) {
+    const safeIndex =
+      typeof exampleIndex === "number" && exampleIndex > 0
+        ? exampleIndex
+        : 1;
+    const safeTotal =
+      typeof examplesTotal === "number" && examplesTotal > 0
+        ? examplesTotal
+        : 30;
     lines.push("");
-    lines.push(`Пример использования из видео: "${exampleText}"`);
+    lines.push(`Пример использования из видео (${safeIndex}/${safeTotal}):`);
+    lines.push(`> "${exampleText}"`);
   }
   return lines.join("\n");
 };
 
 const escapeMarkdown = (value: string) =>
-  value.replace(/[*_\\[\\]()~`>#+=|{}.!-]/g, "\\$&");
+  value.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
 
 const highlightWord = (text: string, word: string) => {
   const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const regex = new RegExp(`\\b(${escapedWord})\\b`, "gi");
-  return text.replace(regex, "*$1*");
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  const parts: string[] = [];
+  while ((match = regex.exec(text)) !== null) {
+    const before = text.slice(lastIndex, match.index);
+    if (before) {
+      parts.push(escapeMarkdown(before));
+    }
+    parts.push(`__*${escapeMarkdown(match[0])}*__`);
+    lastIndex = match.index + match[0].length;
+  }
+  const rest = text.slice(lastIndex);
+  if (rest) {
+    parts.push(escapeMarkdown(rest));
+  }
+  return parts.join("");
 };
 
 const buildWebAppUrl = (word: string) => {
@@ -273,7 +301,7 @@ const sendTelegramVideoFile = async (
   const form = new FormDataCtor();
   form.append("chat_id", chatId);
   form.append("caption", caption);
-  form.append("parse_mode", "Markdown");
+  form.append("parse_mode", "MarkdownV2");
   form.append("supports_streaming", "true");
   form.append("reply_markup", JSON.stringify(replyMarkup));
   const blob = new Blob([fileBuffer], { type: "video/mp4" });
@@ -447,19 +475,17 @@ export const sendWordShare = async (req: Request, res: Response) => {
     }
 
     const rawExample =
-      (typeof body.exampleText === "string" ? body.exampleText : "") ||
-      "";
-    const safeExample = rawExample ? escapeMarkdown(rawExample) : "";
-    const highlightedExample = safeExample
-      ? highlightWord(safeExample, escapeMarkdown(word))
-      : "";
+      (typeof body.exampleText === "string" ? body.exampleText : "") || "";
+    const highlightedExample = rawExample ? highlightWord(rawExample, word) : "";
 
     const caption = buildCaption(
-      escapeMarkdown(word),
-      escapeMarkdown(translation),
+      escapeMarkdown(word.toUpperCase()),
+      escapeMarkdown((translation || "слово").toUpperCase()),
       extraTranslations.map(escapeMarkdown),
       synonyms.map(escapeMarkdown),
       highlightedExample,
+      body.exampleIndex,
+      body.examplesTotal,
     );
     const webAppUrl = buildWebAppUrl(word);
     console.log("[share] prepared payload", {
@@ -485,7 +511,14 @@ export const sendWordShare = async (req: Request, res: Response) => {
           inline_keyboard: [
             [
               {
-                text: "Еще 30 примеров в Slothary",
+                text: `Еще ${
+                  Math.max(
+                    (typeof body.examplesTotal === "number" && body.examplesTotal > 0
+                      ? body.examplesTotal
+                      : 30) - 1,
+                    0,
+                  )
+                } примеров в Slothary`,
                 url: webAppUrl,
               },
             ],
@@ -497,7 +530,7 @@ export const sendWordShare = async (req: Request, res: Response) => {
         chat_id: telegram.id,
         video: videoUrl,
         caption,
-        parse_mode: "Markdown",
+        parse_mode: "MarkdownV2",
         supports_streaming: true,
         reply_markup: replyMarkup,
       });
@@ -534,7 +567,7 @@ export const sendWordShare = async (req: Request, res: Response) => {
       await telegramApi("sendMessage", {
         chat_id: telegram.id,
         text: caption,
-        parse_mode: "Markdown",
+        parse_mode: "MarkdownV2",
         reply_markup: replyMarkup,
       });
       res.json({ ok: true, mode: "text" });
