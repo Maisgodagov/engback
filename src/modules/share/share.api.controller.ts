@@ -59,7 +59,7 @@ const highlightWord = (text: string, word: string) => {
     if (before) {
       parts.push(escapeHtml(before));
     }
-    parts.push(`<u><b>${escapeHtml(match[0])}</b></u>`);
+    parts.push(`<u><b><i>${escapeHtml(match[0])}</i></b></u>`);
     lastIndex = match.index + match[0].length;
   }
   const rest = text.slice(lastIndex);
@@ -92,10 +92,7 @@ const buildCaption = (
     lines.push(`<b>Синонимы:</b> <i>${synonyms.join(", ")}</i>`);
   }
   if (exampleText) {
-    const safeIndex =
-      typeof exampleIndex === "number" && exampleIndex > 0
-        ? exampleIndex
-        : 1;
+    const safeIndex = 1;
     const safeTotal =
       typeof examplesTotal === "number" && examplesTotal > 0
         ? examplesTotal
