@@ -88,6 +88,7 @@ const buildCaption = (
     lines.push(`<b>Другие переводы:</b> <i>${extraTranslations.join(", ")}</i>`);
   }
   if (synonyms.length) {
+    lines.push("");
     lines.push(`<b>Синонимы:</b> <i>${synonyms.join(", ")}</i>`);
   }
   if (exampleText) {
@@ -101,7 +102,7 @@ const buildCaption = (
         : 30;
     lines.push("");
     lines.push(`Пример использования из видео (${safeIndex}/${safeTotal}):`);
-    lines.push(`"${exampleText}"`);
+    lines.push(`<blockquote>“${exampleText}”</blockquote>`);
   }
   return lines.join("\n");
 };
