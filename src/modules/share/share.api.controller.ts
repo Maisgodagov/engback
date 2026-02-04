@@ -28,6 +28,7 @@ type ShareRequestBody = {
   videoUrl?: string;
   startSeconds?: number;
   endSeconds?: number;
+  exampleText?: string;
 };
 
 const safeList = (value?: unknown): string[] => {
@@ -445,18 +446,8 @@ export const sendWordShare = async (req: Request, res: Response) => {
       }
     }
 
-    const snippetResultForText = await videoLearningService.searchPhrase(
-      word,
-      1,
-      1,
-      undefined,
-      1,
-    );
-    const firstSnippet = snippetResultForText.items?.[0];
     const rawExample =
-      firstSnippet?.contextText ||
-      firstSnippet?.matchedText ||
-      firstSnippet?.translationContextText ||
+      (typeof body.exampleText === "string" ? body.exampleText : "") ||
       "";
     const safeExample = rawExample ? escapeMarkdown(rawExample) : "";
     const highlightedExample = safeExample
