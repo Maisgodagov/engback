@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { execFile } from "node:child_process";
+import { Blob } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -152,7 +153,13 @@ const sendTelegramVideoFile = async (
   if (!TELEGRAM_BOT_TOKEN) {
     throw Object.assign(new Error("Missing TELEGRAM_BOT_TOKEN"), { status: 500 });
   }
-  const form = new FormData();
+  const FormDataCtor = (globalThis as any).FormData;
+  if (!FormDataCtor) {
+    throw Object.assign(new Error("FormData is not available in this Node runtime"), {
+      status: 500,
+    });
+  }
+  const form = new FormDataCtor();
   form.append("chat_id", chatId);
   form.append("caption", caption);
   form.append("supports_streaming", "true");
