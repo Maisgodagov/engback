@@ -198,6 +198,8 @@ export const sendWordShare = async (req: Request, res: Response) => {
         : 0,
       synonymsCount: Array.isArray(body.synonyms) ? body.synonyms.length : 0,
       videoUrl: body.videoUrl,
+      startSeconds: body.startSeconds,
+      endSeconds: body.endSeconds,
     });
     if (!initData || !word) {
       res.status(400).json({ message: "Missing initData or word" });
@@ -245,10 +247,41 @@ export const sendWordShare = async (req: Request, res: Response) => {
         // ignore snippet errors
       }
     }
-    const startSeconds =
+    let startSeconds =
       typeof body.startSeconds === "number" ? body.startSeconds : undefined;
-    const endSeconds =
+    let endSeconds =
       typeof body.endSeconds === "number" ? body.endSeconds : undefined;
+
+    if (videoUrl && isHlsUrl(videoUrl) && startSeconds === undefined) {
+      try {
+        const snippetResult = await videoLearningService.searchPhrase(
+          word,
+          1,
+          1,
+          undefined,
+          1,
+        );
+        const first = snippetResult.items?.[0];
+        if (first?.videoUrl) {
+          videoUrl = first.videoUrl;
+        }
+        if (typeof first?.startSeconds === "number") {
+          startSeconds = first.startSeconds;
+        }
+        if (typeof first?.endSeconds === "number") {
+          endSeconds = first.endSeconds;
+        }
+        console.log("[share] fetched snippet for timings", {
+          videoUrl,
+          startSeconds,
+          endSeconds,
+        });
+      } catch (timingError: any) {
+        console.error("[share] failed to fetch snippet timings", {
+          message: timingError?.message,
+        });
+      }
+    }
 
     const caption = buildCaption(word, translation, extraTranslations, synonyms);
     const webAppUrl = buildWebAppUrl(word);
