@@ -44,7 +44,10 @@ const buildCaption = (
 
 const buildWebAppUrl = (word: string) => {
   const payload = `word_${word.toLowerCase().slice(0, 48)}`;
-  const params = new URLSearchParams({ startapp: payload });
+  const params = new URLSearchParams({
+    startapp: payload,
+    word: word.toLowerCase(),
+  });
   return `${APP_PUBLIC_URL}/?${params.toString()}`;
 };
 
