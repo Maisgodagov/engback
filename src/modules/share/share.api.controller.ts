@@ -14,7 +14,7 @@ const APP_PUBLIC_URL = process.env.APP_PUBLIC_URL ?? "https://app.slothary.ru";
 const TELEGRAM_BOT_USERNAME =
   process.env.TELEGRAM_BOT_USERNAME ?? "slothary_bot";
 const TELEGRAM_WEBAPP_SHORT_NAME =
-  process.env.TELEGRAM_WEBAPP_SHORT_NAME ?? "";
+  process.env.TELEGRAM_WEBAPP_SHORT_NAME ?? "slothary";
 const TELEGRAM_USE_WEB_APP_BUTTON =
   process.env.TELEGRAM_USE_WEB_APP_BUTTON === "true";
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
