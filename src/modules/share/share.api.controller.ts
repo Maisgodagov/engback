@@ -119,26 +119,52 @@ const generateMp4Clip = async (sourceUrl: string, start?: number, end?: number) 
 
   const args = [
     "-y",
-    "-ss",
-    safeStart.toFixed(2),
+    "-protocol_whitelist",
+    "file,crypto,data,https,tcp,tls",
+    "-user_agent",
+    "Mozilla/5.0",
     "-i",
     sourceUrl,
+    "-ss",
+    safeStart.toFixed(2),
     "-t",
     duration.toFixed(2),
     "-c:v",
     "libx264",
+    "-profile:v",
+    "baseline",
+    "-level",
+    "3.0",
+    "-pix_fmt",
+    "yuv420p",
     "-preset",
     "veryfast",
     "-crf",
     "28",
     "-c:a",
     "aac",
+    "-ar",
+    "44100",
+    "-b:a",
+    "128k",
     "-movflags",
     "+faststart",
+    "-f",
+    "mp4",
     outputPath,
   ];
 
-  await execFileAsync("ffmpeg", args, { timeout: 60_000 });
+  const { stderr } = await execFileAsync("ffmpeg", args, {
+    timeout: 60_000,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  if (stderr) {
+    console.log("[share] ffmpeg stderr", stderr.slice(0, 2000));
+  }
+  const stat = await fs.stat(outputPath);
+  if (!stat.size || stat.size < 50_000) {
+    throw new Error(`Generated clip is too small (${stat.size} bytes)`);
+  }
   const buffer = await fs.readFile(outputPath);
   await fs.rm(tmpDir, { recursive: true, force: true });
   return buffer;
