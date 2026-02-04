@@ -42,11 +42,11 @@ const buildCaption = (
   translation: string,
   extraTranslations: string[],
   synonyms: string[],
+  exampleText?: string,
 ) => {
   const lines: string[] = [];
   const safeTranslation = translation || "слово";
-  lines.push(`🇬🇧 *${word}*`);
-  lines.push(`🇷🇺 *${safeTranslation}*`);
+  lines.push(`🇬🇧 *${word}*  —  🇷🇺 *${safeTranslation}*`);
   if (extraTranslations.length || synonyms.length) {
     lines.push("");
   }
@@ -56,7 +56,20 @@ const buildCaption = (
   if (synonyms.length) {
     lines.push(`Синонимы: ${synonyms.join(", ")}`);
   }
+  if (exampleText) {
+    lines.push("");
+    lines.push(`Пример использования из видео: "${exampleText}"`);
+  }
   return lines.join("\n");
+};
+
+const escapeMarkdown = (value: string) =>
+  value.replace(/[*_\\[\\]()~`>#+=|{}.!-]/g, "\\$&");
+
+const highlightWord = (text: string, word: string) => {
+  const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`\\b(${escapedWord})\\b`, "gi");
+  return text.replace(regex, "*$1*");
 };
 
 const buildWebAppUrl = (word: string) => {
@@ -432,7 +445,31 @@ export const sendWordShare = async (req: Request, res: Response) => {
       }
     }
 
-    const caption = buildCaption(word, translation, extraTranslations, synonyms);
+    const snippetResultForText = await videoLearningService.searchPhrase(
+      word,
+      1,
+      1,
+      undefined,
+      1,
+    );
+    const firstSnippet = snippetResultForText.items?.[0];
+    const rawExample =
+      firstSnippet?.contextText ||
+      firstSnippet?.matchedText ||
+      firstSnippet?.translationContextText ||
+      "";
+    const safeExample = rawExample ? escapeMarkdown(rawExample) : "";
+    const highlightedExample = safeExample
+      ? highlightWord(safeExample, escapeMarkdown(word))
+      : "";
+
+    const caption = buildCaption(
+      escapeMarkdown(word),
+      escapeMarkdown(translation),
+      extraTranslations.map(escapeMarkdown),
+      synonyms.map(escapeMarkdown),
+      highlightedExample,
+    );
     const webAppUrl = buildWebAppUrl(word);
     console.log("[share] prepared payload", {
       chatId: telegram.id,
@@ -457,7 +494,7 @@ export const sendWordShare = async (req: Request, res: Response) => {
           inline_keyboard: [
             [
               {
-                text: "Open Slothary",
+                text: "Еще 30 примеров в Slothary",
                 url: webAppUrl,
               },
             ],
