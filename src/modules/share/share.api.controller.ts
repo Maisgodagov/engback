@@ -60,7 +60,9 @@ const telegramApi = async (method: string, payload: Record<string, unknown>) => 
       body: JSON.stringify(payload),
     },
   );
-  const data = await response.json().catch(() => null);
+  const data = (await response.json().catch(() => null)) as
+    | { ok?: boolean; description?: string }
+    | null;
   if (!response.ok || !data?.ok) {
     const description =
       typeof data?.description === "string"
