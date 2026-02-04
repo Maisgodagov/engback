@@ -1,4 +1,9 @@
 import type { Request, Response } from "express";
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 
 import { parseTelegramInitData } from "../auth/auth.service";
 import { muellerService } from "../mueller/mueller.service";
@@ -96,6 +101,88 @@ const telegramApi = async (method: string, payload: Record<string, unknown>) => 
 };
 
 const isDirectVideoUrl = (url: string) => /\.(mp4|mov|m4v)(\?|#|$)/i.test(url);
+const isHlsUrl = (url: string) => /\.m3u8(\?|#|$)/i.test(url);
+const execFileAsync = promisify(execFile);
+
+const formatSeconds = (value?: number) => {
+  if (typeof value !== "number" || Number.isNaN(value)) return 0;
+  return Math.max(0, value);
+};
+
+const generateMp4Clip = async (sourceUrl: string, start?: number, end?: number) => {
+  const safeStart = formatSeconds(start);
+  const safeEnd = formatSeconds(end);
+  const duration = Math.max(1, Math.min(6, safeEnd > safeStart ? safeEnd - safeStart : 4));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "slothary-clip-"));
+  const outputPath = path.join(tmpDir, `clip-${Date.now()}.mp4`);
+
+  const args = [
+    "-y",
+    "-ss",
+    safeStart.toFixed(2),
+    "-i",
+    sourceUrl,
+    "-t",
+    duration.toFixed(2),
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-crf",
+    "28",
+    "-c:a",
+    "aac",
+    "-movflags",
+    "+faststart",
+    outputPath,
+  ];
+
+  await execFileAsync("ffmpeg", args, { timeout: 60_000 });
+  const buffer = await fs.readFile(outputPath);
+  await fs.rm(tmpDir, { recursive: true, force: true });
+  return buffer;
+};
+
+const sendTelegramVideoFile = async (
+  chatId: string,
+  caption: string,
+  replyMarkup: Record<string, unknown>,
+  fileBuffer: Buffer,
+) => {
+  if (!TELEGRAM_BOT_TOKEN) {
+    throw Object.assign(new Error("Missing TELEGRAM_BOT_TOKEN"), { status: 500 });
+  }
+  const form = new FormData();
+  form.append("chat_id", chatId);
+  form.append("caption", caption);
+  form.append("supports_streaming", "true");
+  form.append("reply_markup", JSON.stringify(replyMarkup));
+  const blob = new Blob([fileBuffer], { type: "video/mp4" });
+  form.append("video", blob, "clip.mp4");
+
+  const response = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`,
+    {
+      method: "POST",
+      body: form,
+    },
+  );
+  const data = (await response.json().catch(() => null)) as
+    | { ok?: boolean; description?: string }
+    | null;
+  console.log("[share] telegramApi response sendVideo(file)", {
+    status: response.status,
+    ok: data?.ok,
+    description: data?.description,
+  });
+  if (!response.ok || !data?.ok) {
+    const description =
+      typeof data?.description === "string"
+        ? data.description
+        : `Telegram API error: ${response.status}`;
+    throw Object.assign(new Error(description), { status: 502 });
+  }
+};
 
 export const sendWordShare = async (req: Request, res: Response) => {
   try {
@@ -158,10 +245,10 @@ export const sendWordShare = async (req: Request, res: Response) => {
         // ignore snippet errors
       }
     }
-    if (videoUrl && !isDirectVideoUrl(videoUrl)) {
-      console.log("[share] skip sendVideo: not a direct mp4", { videoUrl });
-      videoUrl = "";
-    }
+    const startSeconds =
+      typeof body.startSeconds === "number" ? body.startSeconds : undefined;
+    const endSeconds =
+      typeof body.endSeconds === "number" ? body.endSeconds : undefined;
 
     const caption = buildCaption(word, translation, extraTranslations, synonyms);
     const webAppUrl = buildWebAppUrl(word);
@@ -195,7 +282,7 @@ export const sendWordShare = async (req: Request, res: Response) => {
           ],
         };
 
-    if (videoUrl) {
+    if (videoUrl && isDirectVideoUrl(videoUrl)) {
       await telegramApi("sendVideo", {
         chat_id: telegram.id,
         video: videoUrl,
@@ -203,15 +290,42 @@ export const sendWordShare = async (req: Request, res: Response) => {
         supports_streaming: true,
         reply_markup: replyMarkup,
       });
-    } else {
+      res.json({ ok: true, mode: "video-url" });
+      return;
+    }
+
+    if (videoUrl && isHlsUrl(videoUrl) && startSeconds !== undefined) {
+      try {
+        console.log("[share] generating clip via ffmpeg", {
+          videoUrl,
+          startSeconds,
+          endSeconds,
+        });
+        const buffer = await generateMp4Clip(videoUrl, startSeconds, endSeconds);
+        await sendTelegramVideoFile(telegram.id, caption, replyMarkup, buffer);
+        res.json({ ok: true, mode: "video-clip" });
+        return;
+      } catch (clipError: any) {
+        console.error("[share] clip generation failed", {
+          message: clipError?.message,
+        });
+      }
+    }
+
+    if (videoUrl) {
+      console.log("[share] skip sendVideo: unsupported video url", { videoUrl });
+    }
+    {
       await telegramApi("sendMessage", {
         chat_id: telegram.id,
         text: caption,
         reply_markup: replyMarkup,
       });
+      res.json({ ok: true, mode: "text" });
+      return;
     }
 
-    res.json({ ok: true });
+    res.json({ ok: true, mode: "text" });
   } catch (error: any) {
     console.error("[share] sendWordShare error", {
       message: error?.message,
