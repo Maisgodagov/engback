@@ -2031,11 +2031,10 @@ const runTokenSearch = async (
       : allowedContentIds;
 
   const snippets: PhraseSnippet[] = [];
-  const processedContentIds = new Set<number>();
-  const ensuredContents = new Set<number>();
-  const metadataCache = new Map<number, SnippetContentRecord>();
-  const authorByContentId = new Map<number, string | null>();
-  const authorCounts = new Map<string, number>();
+    const processedContentIds = new Set<number>();
+    const ensuredContents = new Set<number>();
+    const metadataCache = new Map<number, SnippetContentRecord>();
+    const authorByContentId = new Map<number, string | null>();
 
   let candidateCursor: TokenCandidateRow | null = null;
   let batchCount = 0;
@@ -2080,11 +2079,6 @@ const runTokenSearch = async (
       }
       const authorKey = normalizeSnippetAuthorKey(metadata.author ?? null);
       authorByContentId.set(match.contentId, metadata.author ?? null);
-      const currentAuthorCount = authorCounts.get(authorKey) ?? 0;
-      if (currentAuthorCount >= 3) {
-        processedContentIds.add(candidate.contentId);
-        continue;
-      }
 
       const snippet = await buildSnippetFromMatch(
         match,
@@ -2096,7 +2090,6 @@ const runTokenSearch = async (
       }
 
       snippets.push(snippet);
-      authorCounts.set(authorKey, currentAuthorCount + 1);
       processedContentIds.add(candidate.contentId);
       if (snippets.length >= snippetCap) {
         break;
