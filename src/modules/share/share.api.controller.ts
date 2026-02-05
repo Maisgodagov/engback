@@ -105,12 +105,19 @@ const buildCaption = (
 };
 
 const buildWebAppUrl = (word: string) => {
-  const payload = `word_${word.toLowerCase().slice(0, 48)}`;
-  const params = new URLSearchParams({ startapp: payload, word: word.toLowerCase() });
+  const safeWord = word.trim().toLowerCase();
+  const payload = `word_${safeWord.slice(0, 48)}`;
+  const params = safeWord
+    ? new URLSearchParams({ startapp: payload, word: safeWord })
+    : new URLSearchParams();
   if (TELEGRAM_WEBAPP_SHORT_NAME) {
-    return `https://t.me/${TELEGRAM_BOT_USERNAME}/${TELEGRAM_WEBAPP_SHORT_NAME}?${params.toString()}`;
+    const query = params.toString();
+    return `https://t.me/${TELEGRAM_BOT_USERNAME}/${TELEGRAM_WEBAPP_SHORT_NAME}${
+      query ? `?${query}` : ""
+    }`;
   }
-  return `${APP_PUBLIC_URL}/#/dictionary?${params.toString()}`;
+  const query = params.toString();
+  return `${APP_PUBLIC_URL}/#/dictionary${query ? `?${query}` : ""}`;
 };
 
 const telegramApi = async (method: string, payload: Record<string, unknown>) => {
@@ -583,5 +590,39 @@ export const sendWordShare = async (req: Request, res: Response) => {
     });
     const status = Number(error?.status ?? 500);
     res.status(status).json({ message: error?.message ?? "Share failed" });
+  }
+};
+
+export const sendWelcomeMessage = async (req: Request, res: Response) => {
+  try {
+    const initData = typeof req.body?.initData === "string" ? req.body.initData : "";
+    if (!initData) {
+      res.status(400).json({ message: "Missing initData" });
+      return;
+    }
+    const telegram = parseTelegramInitData(initData);
+    const text =
+      "Добро пожаловать в Slothary! Здесь ты можешь учить английский по видео, " +
+      "а в словаре — смотреть переводы с видео‑примерами. " +
+      "Открывай веб‑приложение кнопкой ниже.";
+    const replyMarkup = {
+      inline_keyboard: [
+        [
+          {
+            text: "Открыть Slothary",
+            url: buildWebAppUrl(""),
+          },
+        ],
+      ],
+    };
+    await telegramApi("sendMessage", {
+      chat_id: telegram.id,
+      text,
+      reply_markup: replyMarkup,
+    });
+    res.json({ ok: true });
+  } catch (error: any) {
+    const status = Number(error?.status ?? 500);
+    res.status(status).json({ message: error?.message ?? "Welcome failed" });
   }
 };
