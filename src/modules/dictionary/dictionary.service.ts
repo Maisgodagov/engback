@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../shared/prisma/prismaClient';
-import type { CreateUserWordInput, RecordDictionaryViewInput } from './dictionary.schemas';
+import type { CreateUserPhraseInput, CreateUserWordInput, RecordDictionaryViewInput } from './dictionary.schemas';
 import { buildYandexEntries, muellerService, type YandexDictResponse } from '../mueller/mueller.service';
 
 type DictionaryEntryResponse = {
@@ -8,6 +8,14 @@ type DictionaryEntryResponse = {
   word: string;
   translation: string;
   otherTranslations: string[];
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type PhraseEntryResponse = {
+  id: string;
+  phrase: string;
+  translation: string;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -178,7 +186,8 @@ export const dictionaryService = {
       take,
       skip,
     });
-    return result.map((entry) => ({
+    const words = result.map((entry) => ({
+      type: 'word' as const,
       id: entry.id,
       word: entry.word,
       translation: entry.translation,
@@ -195,7 +204,26 @@ export const dictionaryService = {
       ),
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
-    })) as DictionaryEntryResponse[];
+    })) as Array<DictionaryEntryResponse & { type: 'word' }>;
+
+    const phraseRows = await prisma.userPhrase.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take,
+      skip,
+    });
+    const phrases = phraseRows.map((entry) => ({
+      type: 'phrase' as const,
+      id: entry.id,
+      phrase: entry.phrase,
+      translation: entry.translation,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+    })) as Array<PhraseEntryResponse & { type: 'phrase' }>;
+
+    return [...words, ...phrases].sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+    );
   },
 
   async create(userId: string, payload: CreateUserWordInput) {
@@ -298,8 +326,77 @@ export const dictionaryService = {
     } as DictionaryEntryResponse;
   },
 
+  async createPhrase(userId: string, payload: CreateUserPhraseInput) {
+    const query = payload.query.trim();
+    const lang = payload.lang === 'ru' ? 'ru' : 'en';
+
+    if (!query) {
+      throw Object.assign(new Error('Query is required'), { status: 400 });
+    }
+
+    const targetLang = lang === 'ru' ? 'en' : 'ru';
+    const translation = await dictionaryService.translatePhrase(query, lang, targetLang);
+    if (!translation) {
+      throw Object.assign(new Error('Phrase translation not found'), { status: 404 });
+    }
+
+    const cacheRow = await prisma.phraseTranslationCache.findUnique({
+      where: {
+        query_sourceLang_targetLang: {
+          query,
+          sourceLang: lang,
+          targetLang,
+        },
+      },
+    });
+
+    const phrase = lang === 'ru' ? translation : query;
+    const phraseTranslation = lang === 'ru' ? query : translation;
+
+    const existing = await prisma.userPhrase.findFirst({
+      where: {
+        userId,
+        phrase,
+        translation: phraseTranslation,
+      },
+    });
+    if (existing) {
+      return {
+        id: existing.id,
+        phrase: existing.phrase,
+        translation: existing.translation,
+        createdAt: existing.createdAt,
+        updatedAt: existing.updatedAt,
+      } as PhraseEntryResponse;
+    }
+
+    const created = await prisma.userPhrase.create({
+      data: {
+        userId,
+        phrase,
+        translation: phraseTranslation,
+        phraseCacheId: cacheRow?.id ?? null,
+      },
+    });
+
+    return {
+      id: created.id,
+      phrase: created.phrase,
+      translation: created.translation,
+      createdAt: created.createdAt,
+      updatedAt: created.updatedAt,
+    } as PhraseEntryResponse;
+  },
+
   async remove(userId: string, id: string) {
     const result = await prisma.userWord.deleteMany({
+      where: { id, userId },
+    });
+    return result.count > 0;
+  },
+
+  async removePhrase(userId: string, id: string) {
+    const result = await prisma.userPhrase.deleteMany({
       where: { id, userId },
     });
     return result.count > 0;

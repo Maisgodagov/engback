@@ -7,7 +7,16 @@ export const createUserWordSchema = z.object({
   translation: z.string().min(1).optional(),
 });
 
+export const createUserPhraseSchema = z.object({
+  query: z.string().min(1, 'Query is required'),
+  lang: z.enum(['en', 'ru']).default('en'),
+});
+
 export const deleteUserWordSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const deleteUserPhraseSchema = z.object({
   id: z.string().min(1),
 });
 
@@ -19,5 +28,6 @@ export const recordDictionaryViewSchema = z.object({
 });
 
 export type CreateUserWordInput = z.infer<typeof createUserWordSchema>;
+export type CreateUserPhraseInput = z.infer<typeof createUserPhraseSchema>;
 export type RecordDictionaryViewInput = z.infer<typeof recordDictionaryViewSchema>;
 

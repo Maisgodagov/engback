@@ -25,6 +25,7 @@ model User {
   lessonProgress        UserLessonProgress[]
   moduleProgress        UserModuleProgress[]
   words                 UserWord[]
+  phrases               UserPhrase[]
   dictionaryViews       UserDictionaryView[]
   videoLearningProgress VideoLearningProgress[]
   videoLikes            VideoLike[]
@@ -564,10 +565,27 @@ model PhraseTranslationCache {
   translation String  @db.Text
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
+  userPhrases UserPhrase[]
 
   @@unique([query, sourceLang, targetLang], map: "uniq_phrase_query_langs")
   @@index([query], map: "idx_phrase_query")
   @@map("phrase_translation_cache")
+}
+
+model UserPhrase {
+  id              String                  @id @default(cuid())
+  userId          String
+  phrase          String                  @db.VarChar(500)
+  translation     String                  @db.Text
+  phraseCacheId   Int?                    @map("phrase_cache_id")
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @default(now()) @updatedAt
+  user            User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phraseCache     PhraseTranslationCache? @relation(fields: [phraseCacheId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@unique([userId, phraseCacheId], map: "uniq_user_phrase_cache")
+  @@map("user_phrases")
 }
 
 model ReadingBook {

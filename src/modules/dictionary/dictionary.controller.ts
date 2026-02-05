@@ -1,7 +1,9 @@
 import type { Request, Response } from 'express';
 
 import {
+  createUserPhraseSchema,
   createUserWordSchema,
+  deleteUserPhraseSchema,
   deleteUserWordSchema,
   recordDictionaryViewSchema,
 } from './dictionary.schemas';
@@ -101,7 +103,19 @@ export const create = async (req: Request, res: Response) => {
 
   const payload = createUserWordSchema.parse(req.body);
   const entry = await dictionaryService.create(userId, payload);
-  res.status(201).json(entry);
+  res.status(201).json({ ...entry, type: 'word' });
+};
+
+export const createPhrase = async (req: Request, res: Response) => {
+  const userId = getUserId(req);
+  if (!userId) {
+    res.status(401).json({ message: 'Missing user identifier' });
+    return;
+  }
+
+  const payload = createUserPhraseSchema.parse(req.body);
+  const entry = await dictionaryService.createPhrase(userId, payload);
+  res.status(201).json({ ...entry, type: 'phrase' });
 };
 
 export const remove = async (req: Request, res: Response) => {
@@ -115,6 +129,22 @@ export const remove = async (req: Request, res: Response) => {
   const deleted = await dictionaryService.remove(userId, params.id);
   if (!deleted) {
     res.status(404).json({ message: 'Word not found' });
+    return;
+  }
+  res.status(204).end();
+};
+
+export const removePhrase = async (req: Request, res: Response) => {
+  const userId = getUserId(req);
+  if (!userId) {
+    res.status(401).json({ message: 'Missing user identifier' });
+    return;
+  }
+
+  const params = deleteUserPhraseSchema.parse({ id: req.params.id });
+  const deleted = await dictionaryService.removePhrase(userId, params.id);
+  if (!deleted) {
+    res.status(404).json({ message: 'Phrase not found' });
     return;
   }
   res.status(204).end();
