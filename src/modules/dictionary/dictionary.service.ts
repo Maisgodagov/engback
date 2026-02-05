@@ -12,16 +12,15 @@ type DictionaryEntryResponse = {
   updatedAt: Date;
 };
 
-type MyMemoryResponse = {
-  responseData?: { translatedText?: string };
-  responseStatus?: number;
-  responseDetails?: string;
-};
-
 const PHRASE_TRANSLATION_TTL_MS = 1000 * 60 * 60 * 24;
 const phraseTranslationCache = new Map<string, { value: string; expiresAt: number }>();
 const normalizeCacheKey = (text: string) => text.trim().toLowerCase();
-const MYMEMORY_EMAIL = process.env.MYMEMORY_EMAIL ?? '';
+const DEEPL_API_KEY = process.env.DEEPL_API_KEY ?? '';
+
+type DeepLResponse = {
+  translations?: Array<{ text?: string }>;
+  message?: string;
+};
 
 const getOtherTranslations = (
   cache: { query: string; lang: string; response: unknown } | null,
@@ -77,35 +76,36 @@ export const dictionaryService = {
     if (!normalizedText) {
       throw Object.assign(new Error('Text is required'), { status: 400 });
     }
+    if (!DEEPL_API_KEY) {
+      throw Object.assign(new Error('DeepL API key is not configured'), { status: 500 });
+    }
     const cacheKey = `${from}|${to}|${normalizeCacheKey(normalizedText)}`;
     const cached = phraseTranslationCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.value;
     }
 
-    const url = new URL('https://api.mymemory.translated.net/get');
-    url.searchParams.set('q', normalizedText);
-    url.searchParams.set('langpair', `${from}|${to}`);
-    if (MYMEMORY_EMAIL) {
-      url.searchParams.set('de', MYMEMORY_EMAIL);
-    }
+    const deeplUrl = new URL('https://api-free.deepl.com/v2/translate');
+    const body = new URLSearchParams();
+    body.set('auth_key', DEEPL_API_KEY);
+    body.set('text', normalizedText);
+    body.set('source_lang', from.toUpperCase());
+    body.set('target_lang', to.toUpperCase());
 
-    const response = await fetch(url.toString(), {
-      headers: { Accept: 'application/json' },
+    const deeplResponse = await fetch(deeplUrl.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
     });
-    if (!response.ok) {
+    if (!deeplResponse.ok) {
       throw Object.assign(
-        new Error(`MyMemory error: ${response.status} ${response.statusText}`),
+        new Error(`DeepL error: ${deeplResponse.status} ${deeplResponse.statusText}`),
         { status: 502 },
       );
     }
-    const data = (await response.json()) as MyMemoryResponse;
-    const status = typeof data.responseStatus === 'number' ? data.responseStatus : 0;
-    if (status !== 200) {
-      const details = data.responseDetails || 'MyMemory error';
-      throw Object.assign(new Error(details), { status: 502 });
-    }
-    const translatedText = data.responseData?.translatedText?.trim() ?? '';
+    const data = (await deeplResponse.json()) as DeepLResponse;
+    const translatedText = data.translations?.[0]?.text?.trim() ?? '';
+
     if (translatedText) {
       phraseTranslationCache.set(cacheKey, {
         value: translatedText,
