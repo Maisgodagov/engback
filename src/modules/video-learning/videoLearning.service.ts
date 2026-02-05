@@ -2009,7 +2009,6 @@ type ChunkSearchRecord = {
   videoName: string;
   videoUrl: string | null;
   transcript_word_chunks: unknown;
-  transcriptChunks: unknown;
   durationSeconds: number | null;
   audioLevel: number | null;
   author: string | null;
@@ -2026,8 +2025,6 @@ const buildSnippetsFromRecord = (
   if (!wordChunks.length) return [];
   const matches = findPhraseMatches(wordChunks, normalizedTokens);
   if (!matches.length) return [];
-
-  const sentenceChunks = parseChunkArray(record.transcriptChunks);
 
   const snippets: PhraseSnippet[] = [];
   for (const match of matches) {
@@ -2050,47 +2047,14 @@ const buildSnippetsFromRecord = (
     const minimumDelta = snippetPadding > 0 ? snippetPadding : 0.5;
     const safeEnd = endSeconds > startSeconds ? endSeconds : startSeconds + minimumDelta;
 
-    let sentenceIndexes: number[] = [];
-    if (sentenceChunks.length) {
-      sentenceIndexes = findChunkIndexesInRange(
-        sentenceChunks,
-        startTimestamp,
-        endTimestamp
-      );
-      if (!sentenceIndexes.length) {
-        const fallbackIndex = sentenceChunks.findIndex((chunk) => {
-          const [start, end] = chunk.timestamp;
-          return startTimestamp >= start && startTimestamp <= end + 0.25;
-        });
-        if (fallbackIndex >= 0) {
-          sentenceIndexes = [fallbackIndex];
-        }
-      }
-    }
-
-    const contextSentenceIndexes =
-      sentenceIndexes.length > 0
-        ? findChunkIndexesInRange(sentenceChunks, startSeconds, safeEnd)
-        : [];
-    const englishContextIndexes =
-      contextSentenceIndexes.length > 0
-        ? contextSentenceIndexes
-        : Array.from(
-            { length: match.endIndex - match.startIndex + 1 },
-            (_, offset) => match.startIndex + offset
-          );
-
     const matchedText = formatChunksText(matchedWordChunks);
     if (!matchedText) continue;
-    const contextText =
-      sentenceChunks.length && englishContextIndexes.length
-        ? buildTextFromChunkIndexes(sentenceChunks, englishContextIndexes)
-        : buildContextText(
-            wordChunks,
-            match.startIndex,
-            match.endIndex,
-            CONTEXT_WINDOW
-          );
+    const contextText = buildContextText(
+      wordChunks,
+      match.startIndex,
+      match.endIndex,
+      CONTEXT_WINDOW
+    );
 
     snippets.push({
       id: `${record.id}-${match.startIndex}-${match.endIndex}`,
@@ -2108,6 +2072,9 @@ const buildSnippetsFromRecord = (
           ? record.audioLevel
           : undefined,
     });
+
+    // Only keep the first snippet per video for speed.
+    break;
   }
   return snippets;
 };
@@ -2346,7 +2313,6 @@ const runChunkSearch = async (
         videoName: true,
         videoUrl: true,
         transcript_word_chunks: true,
-        transcriptChunks: true,
         durationSeconds: true,
         audioLevel: true,
         author: true,
