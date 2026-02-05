@@ -15,11 +15,11 @@ type DictionaryEntryResponse = {
 const PHRASE_TRANSLATION_TTL_MS = 1000 * 60 * 60 * 24;
 const phraseTranslationCache = new Map<string, { value: string; expiresAt: number }>();
 const normalizeCacheKey = (text: string) => text.trim().toLowerCase();
-const DEEPL_API_KEY = process.env.DEEPL_API_KEY ?? '';
+const YANDEX_TRANSLATE_API_KEY = process.env.YANDEX_TRANSLATE_API_KEY ?? '';
+const YANDEX_TRANSLATE_FOLDER_ID = process.env.YANDEX_TRANSLATE_FOLDER_ID ?? '';
 
-type DeepLResponse = {
-  translations?: Array<{ text?: string }>;
-  message?: string;
+type YandexTranslateResponse = {
+  translations?: Array<{ text?: string; detectedLanguageCode?: string }>;
 };
 
 const getOtherTranslations = (
@@ -76,8 +76,11 @@ export const dictionaryService = {
     if (!normalizedText) {
       throw Object.assign(new Error('Text is required'), { status: 400 });
     }
-    if (!DEEPL_API_KEY) {
-      throw Object.assign(new Error('DeepL API key is not configured'), { status: 500 });
+    if (!YANDEX_TRANSLATE_API_KEY) {
+      throw Object.assign(new Error('Yandex Translate API key is not configured'), { status: 500 });
+    }
+    if (!YANDEX_TRANSLATE_FOLDER_ID) {
+      throw Object.assign(new Error('Yandex Translate folder ID is not configured'), { status: 500 });
     }
     const cacheKey = `${from}|${to}|${normalizeCacheKey(normalizedText)}`;
     const cached = phraseTranslationCache.get(cacheKey);
@@ -85,25 +88,40 @@ export const dictionaryService = {
       return cached.value;
     }
 
-    const deeplUrl = new URL('https://api-free.deepl.com/v2/translate');
-    const body = new URLSearchParams();
-    body.set('auth_key', DEEPL_API_KEY);
-    body.set('text', normalizedText);
-    body.set('source_lang', from.toUpperCase());
-    body.set('target_lang', to.toUpperCase());
-
-    const deeplResponse = await fetch(deeplUrl.toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body,
-    });
-    if (!deeplResponse.ok) {
+    const response = await fetch(
+      'https://translate.api.cloud.yandex.net/translate/v2/translate',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Api-Key ${YANDEX_TRANSLATE_API_KEY}`,
+        },
+        body: JSON.stringify({
+          folderId: YANDEX_TRANSLATE_FOLDER_ID,
+          sourceLanguageCode: from,
+          targetLanguageCode: to,
+          texts: [normalizedText],
+        }),
+      },
+    );
+    if (!response.ok) {
+      let errorBody = '';
+      try {
+        errorBody = await response.text();
+      } catch {
+        // ignore error body read errors
+      }
+      console.error('[YandexTranslate] error response', {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorBody,
+      });
       throw Object.assign(
-        new Error(`DeepL error: ${deeplResponse.status} ${deeplResponse.statusText}`),
+        new Error(`Yandex Translate error: ${response.status} ${response.statusText}`),
         { status: 502 },
       );
     }
-    const data = (await deeplResponse.json()) as DeepLResponse;
+    const data = (await response.json()) as YandexTranslateResponse;
     const translatedText = data.translations?.[0]?.text?.trim() ?? '';
 
     if (translatedText) {
