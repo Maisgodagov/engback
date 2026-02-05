@@ -2349,7 +2349,8 @@ const runChunkSearch = async (
     limit?: number,
     paddingSeconds?: number,
     cursor?: number,
-    maxSnippets?: number
+    maxSnippets?: number,
+    sampleSize?: number
   ): Promise<PhraseSearchResult> => {
     const startedAt = Date.now();
     const trimmed = (phrase ?? "").trim();
@@ -2397,12 +2398,13 @@ const runChunkSearch = async (
       return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
     }
     const seed = hashSeed(trimmed);
+    const effectiveSampleSize =
+      typeof sampleSize === "number" && sampleSize > 0
+        ? Math.min(sampleSize, candidateIdsByFulltext.length)
+        : Math.min(FULLTEXT_RANDOM_SAMPLE_SIZE, candidateIdsByFulltext.length);
     const randomizedCandidates =
       candidateIdsByFulltext.length > 0
-        ? seededShuffle(candidateIdsByFulltext, seed).slice(
-            0,
-            Math.min(FULLTEXT_RANDOM_SAMPLE_SIZE, candidateIdsByFulltext.length)
-          )
+        ? seededShuffle(candidateIdsByFulltext, seed).slice(0, effectiveSampleSize)
         : [];
 
     if (!randomizedCandidates.length) {

@@ -72,17 +72,19 @@ export const searchPhrase = async (req: Request, res: Response) => {
       phrase: req.query.phrase,
       limit: req.query.limit,
       paddingSeconds: req.query.paddingSeconds,
-      cursor: req.query.cursor,
-      maxSnippets: req.query.maxSnippets,
-    });
+    cursor: req.query.cursor,
+    maxSnippets: req.query.maxSnippets,
+    sampleSize: req.query.sampleSize,
+  });
 
-    const result = await videoLearningService.searchPhrase(
-      query.phrase,
-      query.limit,
-      query.paddingSeconds,
-      query.cursor,
-      query.maxSnippets,
-    );
+  const result = await videoLearningService.searchPhrase(
+    query.phrase,
+    query.limit,
+    query.paddingSeconds,
+    query.cursor,
+    query.maxSnippets,
+    query.sampleSize,
+  );
     res.json(result);
   } catch (error: any) {
     if (error?.name === 'ZodError') {
