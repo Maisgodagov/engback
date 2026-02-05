@@ -341,6 +341,7 @@ const TOKEN_TEXT_LIMIT = 120;
 const TOKEN_CANDIDATE_BATCH_SIZE = 200;
 const MAX_TOKEN_CANDIDATE_BATCHES = 200;
 const FULLTEXT_CANDIDATE_LIMIT = 1200;
+const FULLTEXT_RANDOM_SAMPLE_SIZE = 800;
 const RANDOM_CONTENT_POOL_SIZE = 20000;
 const RANDOM_PRIORITY_JITTER = 12;
 const UNWATCHED_POOL_MULTIPLIER = 6;
@@ -2039,7 +2040,7 @@ const runTokenSearch = async (
   let candidateCursor: TokenCandidateRow | null = null;
   let batchCount = 0;
 
-  const randomizeCandidates = true;
+    const randomizeCandidates = !effectiveAllowedIds;
   while (
     snippets.length < snippetCap &&
     batchCount < MAX_TOKEN_CANDIDATE_BATCHES
@@ -2184,24 +2185,31 @@ const searchPhrase = async (
   const snippetCap = Math.max(pageSize, sanitizeSnippetCap(maxSnippets));
   const cursorOffset = Math.min(sanitizeCursorOffset(cursor), snippetCap);
   const snippetPadding = sanitizePaddingSeconds(paddingSeconds);
-  const searchQuery = trimmed.replace(/[+\-<>()~*"@]/g, " ").trim();
-  const candidateIdsByFulltext = searchQuery
-    ? await fetchCandidateIdsByFulltext(searchQuery, FULLTEXT_CANDIDATE_LIMIT)
-    : [];
-  if (!candidateIdsByFulltext.length && normalizedTokens.length >= 4) {
-    triggerTranscriptTokenBackfill();
-    return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
-  }
-  const diversifiedIds =
-    candidateIdsByFulltext.length > 0
-      ? await diversifyCandidateIdsByAuthor(candidateIdsByFulltext, 3)
+    const searchQuery = trimmed.replace(/[+\-<>()~*"@]/g, " ").trim();
+    const candidateIdsByFulltext = searchQuery
+      ? await fetchCandidateIdsByFulltext(searchQuery, FULLTEXT_CANDIDATE_LIMIT)
       : [];
-  const allowedContentIds =
-    diversifiedIds.length > 0
-      ? diversifiedIds
-      : candidateIdsByFulltext.length > 0
-      ? candidateIdsByFulltext
-      : null;
+    if (!candidateIdsByFulltext.length && normalizedTokens.length >= 4) {
+      triggerTranscriptTokenBackfill();
+      return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
+    }
+    const randomizedCandidates =
+      candidateIdsByFulltext.length > 0
+        ? shuffleArray(candidateIdsByFulltext).slice(
+            0,
+            Math.min(FULLTEXT_RANDOM_SAMPLE_SIZE, candidateIdsByFulltext.length)
+          )
+        : [];
+    const diversifiedIds =
+      randomizedCandidates.length > 0
+        ? await diversifyCandidateIdsByAuthor(randomizedCandidates, 3)
+        : [];
+    const allowedContentIds =
+      diversifiedIds.length > 0
+        ? diversifiedIds
+        : randomizedCandidates.length > 0
+        ? randomizedCandidates
+        : null;
 
   let snippets = await runTokenSearch(
     normalizedTokens,
