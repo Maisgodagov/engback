@@ -749,7 +749,7 @@ export const sendPhraseShare = async (req: Request, res: Response) => {
       body.exampleIndex,
       body.examplesTotal,
     );
-    const webAppUrl = buildWebAppUrlForPhrase(phrase);
+    const webAppUrl = buildWebAppUrl(phrase);
     console.log("[share] prepared payload", {
       chatId: telegram.id,
       captionLength: caption.length,
