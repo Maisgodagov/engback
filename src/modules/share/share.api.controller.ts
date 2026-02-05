@@ -106,13 +106,11 @@ const buildCaption = (
 
 const buildWebAppUrl = (word: string) => {
   const payload = `word_${word.toLowerCase().slice(0, 48)}`;
-  if (TELEGRAM_WEBAPP_SHORT_NAME) {
-    return `https://t.me/${TELEGRAM_BOT_USERNAME}/${TELEGRAM_WEBAPP_SHORT_NAME}?startapp=${encodeURIComponent(
-      payload,
-    )}`;
-  }
   const params = new URLSearchParams({ startapp: payload, word: word.toLowerCase() });
-  return `${APP_PUBLIC_URL}/?${params.toString()}`;
+  if (TELEGRAM_WEBAPP_SHORT_NAME) {
+    return `https://t.me/${TELEGRAM_BOT_USERNAME}/${TELEGRAM_WEBAPP_SHORT_NAME}?${params.toString()}`;
+  }
+  return `${APP_PUBLIC_URL}/#/dictionary?${params.toString()}`;
 };
 
 const telegramApi = async (method: string, payload: Record<string, unknown>) => {
