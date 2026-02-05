@@ -2211,29 +2211,6 @@ const searchPhrase = async (
     allowedContentIds
   );
 
-  if (
-    snippets.length < pageSize &&
-    diversifiedIds.length > 0 &&
-    candidateIdsByFulltext.length > diversifiedIds.length
-  ) {
-    const extra = await runTokenSearch(
-      normalizedTokens,
-      trimmed,
-      snippetPadding,
-      snippetCap,
-      candidateIdsByFulltext
-    );
-    if (extra.length) {
-      const seen = new Set(snippets.map((snippet) => snippet.id ?? ""));
-      extra.forEach((snippet) => {
-        const key = snippet.id ?? "";
-        if (!key || seen.has(key)) return;
-        seen.add(key);
-        snippets.push(snippet);
-      });
-    }
-  }
-
   if (!snippets.length && !allowedContentIds) {
     triggerTranscriptTokenBackfill();
     return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
