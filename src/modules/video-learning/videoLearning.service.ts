@@ -120,6 +120,31 @@ const shuffleArray = <T>(array: T[]): T[] => {
   return shuffled;
 };
 
+const hashSeed = (value: string): number => {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+const seededShuffle = <T>(array: T[], seed: number): T[] => {
+  const result = [...array];
+  let state = seed || 1;
+  const next = () => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 4294967296;
+  };
+  for (let i = result.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(next() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+};
+
 const formatChunksText = (chunks: TranscriptWordChunk[]): string => {
   if (!chunks.length) return "";
   const joined = chunks
@@ -342,6 +367,10 @@ const TOKEN_CANDIDATE_BATCH_SIZE = 200;
 const MAX_TOKEN_CANDIDATE_BATCHES = 200;
 const FULLTEXT_CANDIDATE_LIMIT = 3000;
 const FULLTEXT_RANDOM_SAMPLE_SIZE = 1200;
+const CHUNK_SEARCH_BATCH_SIZE = 200;
+const TOKEN_BACKFILL_QUEUE_BATCH = 50;
+const TOKEN_BACKFILL_CONCURRENCY = 2;
+const SEARCH_DEBUG = process.env.SEARCH_DEBUG === "1";
 const RANDOM_CONTENT_POOL_SIZE = 20000;
 const RANDOM_PRIORITY_JITTER = 12;
 const UNWATCHED_POOL_MULTIPLIER = 6;
@@ -1614,7 +1643,8 @@ const fetchCandidateIdsByFulltext = async (
 
 const diversifyCandidateIdsByAuthor = async (
   candidateIds: number[],
-  maxPerAuthor: number
+  maxPerAuthor: number,
+  seed?: number
 ): Promise<number[]> => {
   if (!candidateIds.length) return [];
   const rows = await prisma.$queryRaw<
@@ -1625,7 +1655,7 @@ const diversifyCandidateIdsByAuthor = async (
     WHERE id IN (${Prisma.join(candidateIds)})
   `;
   const authorMap = new Map(rows.map((row) => [row.id, row.author]));
-  const shuffled = shuffleArray(candidateIds);
+  const shuffled = seed ? seededShuffle(candidateIds, seed) : shuffleArray(candidateIds);
   const counts = new Map<string, number>();
   const result: number[] = [];
   for (const id of shuffled) {
@@ -1656,7 +1686,8 @@ const fetchRandomContentIds = async (limit: number): Promise<number[]> => {
 
 const enforceSnippetAuthorLimit = async (
   snippets: PhraseSnippet[],
-  maxPerAuthor: number
+  maxPerAuthor: number,
+  authorMapOverride?: Map<number, string | null>
 ): Promise<PhraseSnippet[]> => {
   if (snippets.length <= maxPerAuthor) return snippets;
   const contentIds = Array.from(
@@ -1667,14 +1698,18 @@ const enforceSnippetAuthorLimit = async (
     )
   );
   if (!contentIds.length) return snippets;
-  const rows = await prisma.$queryRaw<
-    Array<{ id: number; author: string | null }>
-  >`
-    SELECT id, author
-    FROM video_learning_content
-    WHERE id IN (${Prisma.join(contentIds)})
-  `;
-  const authorMap = new Map(rows.map((row) => [row.id, row.author]));
+  const authorMap =
+    authorMapOverride && authorMapOverride.size > 0
+      ? authorMapOverride
+      : new Map(
+          (
+            await prisma.$queryRaw<Array<{ id: number; author: string | null }>>`
+              SELECT id, author
+              FROM video_learning_content
+              WHERE id IN (${Prisma.join(contentIds)})
+            `
+          ).map((row) => [row.id, row.author])
+        );
   const counts = new Map<string, number>();
   const limited: PhraseSnippet[] = [];
   for (const snippet of snippets) {
@@ -1793,8 +1828,7 @@ const selectAnchorToken = async (
 const resolveCandidateMatch = async (
   candidate: TokenCandidateRow,
   normalizedTokens: string[],
-  anchorOffset: number,
-  ensuredContents: Set<number>
+  anchorOffset: number
 ): Promise<CandidateMatch | null> => {
   const phraseLength = normalizedTokens.length;
   if (!phraseLength) return null;
@@ -1807,17 +1841,12 @@ const resolveCandidateMatch = async (
   const windowStart = Math.max(0, targetStartPosition - TOKEN_CONTEXT_WINDOW);
   const windowEnd =
     targetStartPosition + phraseLength - 1 + TOKEN_CONTEXT_WINDOW;
-  let tokens = await fetchTokenSlice(
-    candidate.contentId,
-    windowStart,
-    windowEnd
-  );
-  if (!tokens.length && !ensuredContents.has(candidate.contentId)) {
-    await ensureTranscriptTokensForContent(candidate.contentId);
-    ensuredContents.add(candidate.contentId);
-    tokens = await fetchTokenSlice(candidate.contentId, windowStart, windowEnd);
-  }
-  if (!tokens.length) return null;
+    let tokens = await fetchTokenSlice(
+      candidate.contentId,
+      windowStart,
+      windowEnd
+    );
+    if (!tokens.length) return null;
 
   const tokensByPosition = new Map(
     tokens.map((token) => [token.position, token])
@@ -1972,7 +2001,128 @@ const buildSnippetFromMatch = async (
         : undefined,
     translationMatchedText: translationMatchedText || undefined,
     translationContextText: translationContextText || undefined,
+    };
   };
+
+type ChunkSearchRecord = {
+  id: number;
+  videoName: string;
+  videoUrl: string | null;
+  transcript_word_chunks: unknown;
+  transcriptChunks: unknown;
+  transcriptTranslationChunks: unknown;
+  durationSeconds: number | null;
+  audioLevel: number | null;
+  author: string | null;
+};
+
+const buildSnippetsFromRecord = (
+  record: ChunkSearchRecord,
+  normalizedTokens: string[],
+  phrase: string,
+  snippetPadding: number
+): PhraseSnippet[] => {
+  if (!record.videoUrl) return [];
+  const wordChunks = parseChunkArray(record.transcript_word_chunks);
+  if (!wordChunks.length) return [];
+  const matches = findPhraseMatches(wordChunks, normalizedTokens);
+  if (!matches.length) return [];
+
+  const sentenceChunks = parseChunkArray(record.transcriptChunks);
+  const translationChunks = parseChunkArray(record.transcriptTranslationChunks);
+
+  const snippets: PhraseSnippet[] = [];
+  for (const match of matches) {
+    const matchedWordChunks = wordChunks.slice(
+      match.startIndex,
+      match.endIndex + 1
+    );
+    if (!matchedWordChunks.length) continue;
+
+    const startTimestamp = matchedWordChunks[0].timestamp[0];
+    const endTimestamp = matchedWordChunks[matchedWordChunks.length - 1].timestamp[1];
+    const startSeconds = Math.max(0, startTimestamp - snippetPadding);
+    const rawEnd = endTimestamp + snippetPadding;
+    const duration =
+      typeof record.durationSeconds === "number" &&
+      Number.isFinite(record.durationSeconds)
+        ? record.durationSeconds
+        : null;
+    const endSeconds = duration !== null ? Math.min(rawEnd, duration) : rawEnd;
+    const minimumDelta = snippetPadding > 0 ? snippetPadding : 0.5;
+    const safeEnd = endSeconds > startSeconds ? endSeconds : startSeconds + minimumDelta;
+
+    let sentenceIndexes: number[] = [];
+    if (sentenceChunks.length) {
+      sentenceIndexes = findChunkIndexesInRange(
+        sentenceChunks,
+        startTimestamp,
+        endTimestamp
+      );
+      if (!sentenceIndexes.length) {
+        const fallbackIndex = sentenceChunks.findIndex((chunk) => {
+          const [start, end] = chunk.timestamp;
+          return startTimestamp >= start && startTimestamp <= end + 0.25;
+        });
+        if (fallbackIndex >= 0) {
+          sentenceIndexes = [fallbackIndex];
+        }
+      }
+    }
+
+    const contextSentenceIndexes =
+      sentenceIndexes.length > 0
+        ? findChunkIndexesInRange(sentenceChunks, startSeconds, safeEnd)
+        : [];
+    const englishContextIndexes =
+      contextSentenceIndexes.length > 0
+        ? contextSentenceIndexes
+        : Array.from(
+            { length: match.endIndex - match.startIndex + 1 },
+            (_, offset) => match.startIndex + offset
+          );
+
+    const matchedText = formatChunksText(matchedWordChunks);
+    if (!matchedText) continue;
+    const contextText =
+      sentenceChunks.length && englishContextIndexes.length
+        ? buildTextFromChunkIndexes(sentenceChunks, englishContextIndexes)
+        : buildContextText(
+            wordChunks,
+            match.startIndex,
+            match.endIndex,
+            CONTEXT_WINDOW
+          );
+
+    const translationMatchedText =
+      translationChunks.length && sentenceIndexes.length
+        ? buildTextFromChunkIndexes(translationChunks, sentenceIndexes)
+        : "";
+    const translationContextText =
+      translationChunks.length && englishContextIndexes.length
+        ? buildTextFromChunkIndexes(translationChunks, englishContextIndexes)
+        : translationMatchedText;
+
+    snippets.push({
+      id: `${record.id}-${match.startIndex}-${match.endIndex}`,
+      contentId: record.id.toString(),
+      videoName: record.videoName,
+      videoUrl: record.videoUrl ?? "",
+      startSeconds,
+      endSeconds: safeEnd,
+      matchedText,
+      contextText,
+      phrase,
+      durationSeconds: duration,
+      audioLevel:
+        typeof record.audioLevel === "number" && Number.isFinite(record.audioLevel)
+          ? record.audioLevel
+          : undefined,
+      translationMatchedText: translationMatchedText || undefined,
+      translationContextText: translationContextText || undefined,
+    });
+  }
+  return snippets;
 };
 
 const triggerTranscriptTokenBackfill = (): void => {
@@ -2004,8 +2154,58 @@ const triggerTranscriptTokenBackfill = (): void => {
     .catch(() => {
       // Silently ignore backfill errors
     })
+      .finally(() => {
+        transcriptTokenBackfillPromise = null;
+      });
+  };
+
+type TokenBackfillTask = {
+  ids: number[];
+};
+
+const tokenBackfillQueue: number[] = [];
+let tokenBackfillActive = 0;
+
+const queueTranscriptTokenBackfill = (contentIds: number[]): void => {
+  const ids = contentIds
+    .filter((id) => Number.isInteger(id) && id > 0)
+    .filter((id, index, arr) => arr.indexOf(id) === index);
+  if (!ids.length) return;
+  tokenBackfillQueue.push(...ids);
+  processTokenBackfillQueue();
+};
+
+const processTokenBackfillQueue = (): void => {
+  if (tokenBackfillActive >= TOKEN_BACKFILL_CONCURRENCY) return;
+  if (!tokenBackfillQueue.length) return;
+  const batch = tokenBackfillQueue.splice(0, TOKEN_BACKFILL_QUEUE_BATCH);
+  if (!batch.length) return;
+  tokenBackfillActive += 1;
+  (async () => {
+    const existing = await prisma.videoTranscriptToken.findMany({
+      where: { contentId: { in: batch } },
+      select: { contentId: true },
+      distinct: ['contentId'],
+    });
+    const existingSet = new Set(existing.map((row) => row.contentId));
+    const missing = batch.filter((id) => !existingSet.has(id));
+    if (!missing.length) return;
+    const records = await prisma.videoLearningContent.findMany({
+      where: { id: { in: missing } },
+      select: { id: true, transcript_word_chunks: true },
+    });
+    for (const record of records) {
+      const chunks = parseChunkArray(record.transcript_word_chunks);
+      if (!chunks.length) continue;
+      await persistTranscriptTokens(record.id, chunks);
+    }
+  })()
+    .catch(() => {
+      // ignore backfill errors
+    })
     .finally(() => {
-      transcriptTokenBackfillPromise = null;
+      tokenBackfillActive -= 1;
+      processTokenBackfillQueue();
     });
 };
 
@@ -2032,14 +2232,13 @@ const runTokenSearch = async (
 
   const snippets: PhraseSnippet[] = [];
     const processedContentIds = new Set<number>();
-    const ensuredContents = new Set<number>();
     const metadataCache = new Map<number, SnippetContentRecord>();
     const authorByContentId = new Map<number, string | null>();
 
   let candidateCursor: TokenCandidateRow | null = null;
   let batchCount = 0;
 
-    const randomizeCandidates = !effectiveAllowedIds;
+    const randomizeCandidates = false;
   while (
     snippets.length < snippetCap &&
     batchCount < MAX_TOKEN_CANDIDATE_BATCHES
@@ -2063,12 +2262,11 @@ const runTokenSearch = async (
         continue;
       }
 
-      const match = await resolveCandidateMatch(
-        candidate,
-        normalizedTokens,
-        anchor.offset,
-        ensuredContents
-      );
+        const match = await resolveCandidateMatch(
+          candidate,
+          normalizedTokens,
+          anchor.offset
+        );
       if (!match) {
         continue;
       }
@@ -2137,18 +2335,76 @@ const runTokenSearch = async (
   return mixed;
 };
 
-const searchPhrase = async (
+const runChunkSearch = async (
+  candidateIds: number[],
+  normalizedTokens: string[],
   phrase: string,
-  limit?: number,
-  paddingSeconds?: number,
-  cursor?: number,
-  maxSnippets?: number
-): Promise<PhraseSearchResult> => {
-  const trimmed = (phrase ?? "").trim();
-  const pageSize = sanitizeSnippetLimit(limit);
-  if (!trimmed) {
-    return {
-      phrase: "",
+  snippetPadding: number,
+  snippetCap: number
+): Promise<{ snippets: PhraseSnippet[]; authorMap: Map<number, string | null> }> => {
+  if (!candidateIds.length) {
+    return { snippets: [], authorMap: new Map() };
+  }
+
+  const snippets: PhraseSnippet[] = [];
+  const snippetIds = new Set<string>();
+  const authorMap = new Map<number, string | null>();
+
+  for (let i = 0; i < candidateIds.length; i += CHUNK_SEARCH_BATCH_SIZE) {
+    const batchIds = candidateIds.slice(i, i + CHUNK_SEARCH_BATCH_SIZE);
+    const records = await prisma.videoLearningContent.findMany({
+      where: { id: { in: batchIds } },
+      select: {
+        id: true,
+        videoName: true,
+        videoUrl: true,
+        transcript_word_chunks: true,
+        transcriptChunks: true,
+        transcriptTranslationChunks: true,
+        durationSeconds: true,
+        audioLevel: true,
+        author: true,
+      },
+    });
+    const recordMap = new Map(records.map((record) => [record.id, record]));
+
+    for (const id of batchIds) {
+      const record = recordMap.get(id);
+      if (!record) continue;
+      authorMap.set(id, record.author ?? null);
+      const recordSnippets = buildSnippetsFromRecord(
+        record,
+        normalizedTokens,
+        phrase,
+        snippetPadding
+      );
+      for (const snippet of recordSnippets) {
+        if (snippetIds.has(snippet.id ?? "")) continue;
+        snippetIds.add(snippet.id ?? "");
+        snippets.push(snippet);
+        if (snippets.length >= snippetCap) break;
+      }
+      if (snippets.length >= snippetCap) break;
+    }
+    if (snippets.length >= snippetCap) break;
+  }
+
+  return { snippets, authorMap };
+};
+
+  const searchPhrase = async (
+    phrase: string,
+    limit?: number,
+    paddingSeconds?: number,
+    cursor?: number,
+    maxSnippets?: number
+  ): Promise<PhraseSearchResult> => {
+    const startedAt = Date.now();
+    const trimmed = (phrase ?? "").trim();
+    const pageSize = sanitizeSnippetLimit(limit);
+    if (!trimmed) {
+      return {
+        phrase: "",
       items: [],
       returned: 0,
       total: 0,
@@ -2175,73 +2431,79 @@ const searchPhrase = async (
     };
   }
 
-  const snippetCap = Math.max(pageSize, sanitizeSnippetCap(maxSnippets));
-  const cursorOffset = Math.min(sanitizeCursorOffset(cursor), snippetCap);
-  const snippetPadding = sanitizePaddingSeconds(paddingSeconds);
+    const snippetCap = Math.max(pageSize, sanitizeSnippetCap(maxSnippets));
+    const cursorOffset = Math.min(sanitizeCursorOffset(cursor), snippetCap);
+    const snippetPadding = sanitizePaddingSeconds(paddingSeconds);
     const searchQuery = trimmed.replace(/[+\-<>()~*"@]/g, " ").trim();
+    const fulltextStart = Date.now();
     const candidateIdsByFulltext = searchQuery
       ? await fetchCandidateIdsByFulltext(searchQuery, FULLTEXT_CANDIDATE_LIMIT)
       : [];
+    const fulltextMs = Date.now() - fulltextStart;
     if (!candidateIdsByFulltext.length && normalizedTokens.length >= 4) {
       triggerTranscriptTokenBackfill();
       return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
     }
+    const seed = hashSeed(trimmed);
     const randomizedCandidates =
       candidateIdsByFulltext.length > 0
-        ? shuffleArray(candidateIdsByFulltext).slice(
+        ? seededShuffle(candidateIdsByFulltext, seed).slice(
             0,
             Math.min(FULLTEXT_RANDOM_SAMPLE_SIZE, candidateIdsByFulltext.length)
           )
         : [];
-    const diversifiedIds =
-      randomizedCandidates.length > 0
-        ? await diversifyCandidateIdsByAuthor(randomizedCandidates, 3)
-        : [];
-    const allowedContentIds =
-      diversifiedIds.length > 0
-        ? diversifiedIds
-        : randomizedCandidates.length > 0
-        ? randomizedCandidates
-        : null;
 
-  let snippets = await runTokenSearch(
-    normalizedTokens,
-    trimmed,
-    snippetPadding,
-    snippetCap,
-    allowedContentIds
-  );
+    if (!randomizedCandidates.length) {
+      triggerTranscriptTokenBackfill();
+      return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
+    }
 
-  if (!snippets.length && !allowedContentIds) {
-    triggerTranscriptTokenBackfill();
-    return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
-  }
+    queueTranscriptTokenBackfill(randomizedCandidates.slice(0, 200));
 
-  if (!snippets.length && allowedContentIds) {
-    snippets = await runTokenSearch(
+    const chunkStart = Date.now();
+    const { snippets: rawSnippets, authorMap } = await runChunkSearch(
+      randomizedCandidates,
       normalizedTokens,
       trimmed,
       snippetPadding,
-      snippetCap,
-      null
+      snippetCap
     );
-  }
+    const chunkMs = Date.now() - chunkStart;
 
-  if (!snippets.length) {
-    triggerTranscriptTokenBackfill();
-    return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
-  }
+    if (!rawSnippets.length) {
+      return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
+    }
 
-  snippets = await enforceSnippetAuthorLimit(snippets, 3);
+    const shuffledSnippets = seededShuffle(rawSnippets, seed + 101);
+    const limitedSnippets = await enforceSnippetAuthorLimit(
+      shuffledSnippets,
+      3,
+      authorMap
+    );
 
-  return paginateSnippets(
-    trimmed,
-    snippets,
-    pageSize,
-    cursorOffset,
-    snippetCap
-  );
-};
+    const result = paginateSnippets(
+      trimmed,
+      limitedSnippets,
+      pageSize,
+      cursorOffset,
+      snippetCap
+    );
+    if (SEARCH_DEBUG) {
+      const totalMs = Date.now() - startedAt;
+      console.log("[VideoSearch] phrase search", {
+        phrase: trimmed,
+        tokens: normalizedTokens.length,
+        candidates: candidateIdsByFulltext.length,
+        sample: randomizedCandidates.length,
+        snippets: rawSnippets.length,
+        returned: result.returned,
+        fulltextMs,
+        chunkMs,
+        totalMs,
+      });
+    }
+    return result;
+  };
 
 const updateLikeStatus = async (
   userId: string,
