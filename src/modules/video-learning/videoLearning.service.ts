@@ -1641,6 +1641,21 @@ const fetchCandidateIdsByFulltext = async (
   return rows.map((row) => row.id);
 };
 
+const fetchCandidateIdsByToken = async (
+  token: string,
+  limit: number
+): Promise<number[]> => {
+  if (!token) return [];
+  const rows = await prisma.$queryRaw<Array<{ id: number }>>`
+    SELECT DISTINCT content_id AS id
+    FROM video_transcript_tokens
+    WHERE token_normalized = ${token}
+    ORDER BY content_id DESC
+    LIMIT ${limit}
+  `;
+  return rows.map((row) => row.id);
+};
+
 const diversifyCandidateIdsByAuthor = async (
   candidateIds: number[],
   maxPerAuthor: number,
@@ -2389,10 +2404,19 @@ const runChunkSearch = async (
     const snippetPadding = sanitizePaddingSeconds(paddingSeconds);
     const searchQuery = trimmed.replace(/[+\-<>()~*"@]/g, " ").trim();
     const fulltextStart = Date.now();
-    const candidateIdsByFulltext = searchQuery
+    let candidateIdsByFulltext = searchQuery
       ? await fetchCandidateIdsByFulltext(searchQuery, FULLTEXT_CANDIDATE_LIMIT)
       : [];
     const fulltextMs = Date.now() - fulltextStart;
+    if (!candidateIdsByFulltext.length) {
+      const anchor = await selectAnchorToken(normalizedTokens, null);
+      if (anchor) {
+        candidateIdsByFulltext = await fetchCandidateIdsByToken(
+          anchor.token,
+          FULLTEXT_CANDIDATE_LIMIT
+        );
+      }
+    }
     if (!candidateIdsByFulltext.length && normalizedTokens.length >= 4) {
       triggerTranscriptTokenBackfill();
       return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
