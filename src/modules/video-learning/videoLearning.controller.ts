@@ -67,22 +67,30 @@ export const getFeed = async (req: Request, res: Response) => {
 };
 
 export const searchPhrase = async (req: Request, res: Response) => {
-  const query = phraseSearchQuerySchema.parse({
-    phrase: req.query.phrase,
-    limit: req.query.limit,
-    paddingSeconds: req.query.paddingSeconds,
-    cursor: req.query.cursor,
-    maxSnippets: req.query.maxSnippets,
-  });
+  try {
+    const query = phraseSearchQuerySchema.parse({
+      phrase: req.query.phrase,
+      limit: req.query.limit,
+      paddingSeconds: req.query.paddingSeconds,
+      cursor: req.query.cursor,
+      maxSnippets: req.query.maxSnippets,
+    });
 
-  const result = await videoLearningService.searchPhrase(
-    query.phrase,
-    query.limit,
-    query.paddingSeconds,
-    query.cursor,
-    query.maxSnippets,
-  );
-  res.json(result);
+    const result = await videoLearningService.searchPhrase(
+      query.phrase,
+      query.limit,
+      query.paddingSeconds,
+      query.cursor,
+      query.maxSnippets,
+    );
+    res.json(result);
+  } catch (error: any) {
+    if (error?.name === 'ZodError') {
+      res.status(400).json({ message: 'Invalid phrase query' });
+      return;
+    }
+    throw error;
+  }
 };
 
 export const getContent = async (req: Request, res: Response) => {
