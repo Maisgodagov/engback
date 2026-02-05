@@ -118,7 +118,11 @@ const buildCaption = (
 
 const buildWebAppUrl = (word: string) => {
   const safeWord = word.trim().toLowerCase();
-  const payload = `word_${safeWord.slice(0, 48)}`;
+  const payloadBase = safeWord
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+  const payload = `word_${payloadBase || "share"}`;
   const params = safeWord
     ? new URLSearchParams({ startapp: payload, word: safeWord })
     : new URLSearchParams();
