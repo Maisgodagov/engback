@@ -33,6 +33,18 @@ type ShareRequestBody = {
   examplesTotal?: number;
 };
 
+type SharePhraseRequestBody = {
+  initData: string;
+  phrase: string;
+  translation?: string;
+  videoUrl?: string;
+  startSeconds?: number;
+  endSeconds?: number;
+  exampleText?: string;
+  exampleIndex?: number;
+  examplesTotal?: number;
+};
+
 const safeList = (value?: unknown): string[] => {
   if (!Array.isArray(value)) return [];
   return value
@@ -118,6 +130,57 @@ const buildWebAppUrl = (word: string) => {
   }
   const query = params.toString();
   return `${APP_PUBLIC_URL}/#/dictionary${query ? `?${query}` : ""}`;
+};
+
+const buildWebAppUrlForPhrase = (phrase: string) => {
+  const safePhrase = phrase.trim().toLowerCase();
+  const payload = `phrase_${safePhrase.slice(0, 48)}`;
+  const params = safePhrase
+    ? new URLSearchParams({ startapp: payload, phrase: safePhrase })
+    : new URLSearchParams();
+  if (TELEGRAM_WEBAPP_SHORT_NAME) {
+    const query = params.toString();
+    return `https://t.me/${TELEGRAM_BOT_USERNAME}/${TELEGRAM_WEBAPP_SHORT_NAME}${
+      query ? `?${query}` : ""
+    }`;
+  }
+  const query = params.toString();
+  return `${APP_PUBLIC_URL}/#/dictionary${query ? `?${query}` : ""}`;
+};
+
+const highlightPhrase = (text: string, phrase: string) => {
+  const tokens = phrase
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.replace(/['’]/g, ""))
+    .filter(Boolean);
+  if (!tokens.length) return escapeHtml(text);
+  const tokenPattern = tokens
+    .map((token) =>
+      token
+        .split("")
+        .map((char) => char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        .join("['’]?")
+    )
+    .map((part) => `\\b${part}\\b`)
+    .join("\\s+");
+  const regex = new RegExp(tokenPattern, "gi");
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  const parts: string[] = [];
+  while ((match = regex.exec(text)) !== null) {
+    const before = text.slice(lastIndex, match.index);
+    if (before) {
+      parts.push(escapeHtml(before));
+    }
+    parts.push(`<u><b><i>${escapeHtml(match[0])}</i></b></u>`);
+    lastIndex = match.index + match[0].length;
+  }
+  const rest = text.slice(lastIndex);
+  if (rest) {
+    parts.push(escapeHtml(rest));
+  }
+  return parts.join("");
 };
 
 const telegramApi = async (method: string, payload: Record<string, unknown>) => {
@@ -585,6 +648,195 @@ export const sendWordShare = async (req: Request, res: Response) => {
     res.json({ ok: true, mode: "text" });
   } catch (error: any) {
     console.error("[share] sendWordShare error", {
+      message: error?.message,
+      status: error?.status,
+    });
+    const status = Number(error?.status ?? 500);
+    res.status(status).json({ message: error?.message ?? "Share failed" });
+  }
+};
+
+export const sendPhraseShare = async (req: Request, res: Response) => {
+  try {
+    const body = req.body as Partial<SharePhraseRequestBody>;
+    const initData = typeof body.initData === "string" ? body.initData : "";
+    const phrase = typeof body.phrase === "string" ? body.phrase.trim() : "";
+    console.log("[share] sendPhraseShare request", {
+      hasInitData: Boolean(initData),
+      phrase,
+      translation: body.translation,
+      videoUrl: body.videoUrl,
+      startSeconds: body.startSeconds,
+      endSeconds: body.endSeconds,
+    });
+    if (!initData || !phrase) {
+      res.status(400).json({ message: "Missing initData or phrase" });
+      return;
+    }
+
+    const telegram = parseTelegramInitData(initData);
+
+    const translation =
+      typeof body.translation === "string" ? body.translation.trim() : "";
+
+    let videoUrl =
+      typeof body.videoUrl === "string" ? body.videoUrl.trim() : "";
+    if (!videoUrl) {
+      try {
+        const snippetResult = await videoLearningService.searchPhrase(
+          phrase,
+          1,
+          1,
+          undefined,
+          1,
+        );
+        const first = snippetResult.items?.[0];
+        if (first?.videoUrl) {
+          videoUrl = first.videoUrl;
+        }
+      } catch {
+        // ignore snippet errors
+      }
+    }
+    let startSeconds =
+      typeof body.startSeconds === "number" ? body.startSeconds : undefined;
+    let endSeconds =
+      typeof body.endSeconds === "number" ? body.endSeconds : undefined;
+
+    if (videoUrl && isHlsUrl(videoUrl) && startSeconds === undefined) {
+      try {
+        const snippetResult = await videoLearningService.searchPhrase(
+          phrase,
+          1,
+          1,
+          undefined,
+          1,
+        );
+        const first = snippetResult.items?.[0];
+        if (first?.videoUrl) {
+          videoUrl = first.videoUrl;
+        }
+        if (typeof first?.startSeconds === "number") {
+          startSeconds = first.startSeconds;
+        }
+        if (typeof first?.endSeconds === "number") {
+          endSeconds = first.endSeconds;
+        }
+        console.log("[share] fetched snippet for timings", {
+          videoUrl,
+          startSeconds,
+          endSeconds,
+        });
+      } catch (timingError: any) {
+        console.error("[share] failed to fetch snippet timings", {
+          message: timingError?.message,
+        });
+      }
+    }
+
+    const rawExample =
+      (typeof body.exampleText === "string" ? body.exampleText : "") || "";
+    const highlightedExample = rawExample
+      ? highlightPhrase(rawExample, phrase)
+      : "";
+
+    const caption = buildCaption(
+      escapeHtml(phrase.toUpperCase()),
+      escapeHtml((translation || "ФРАЗА").toUpperCase()),
+      [],
+      [],
+      highlightedExample,
+      body.exampleIndex,
+      body.examplesTotal,
+    );
+    const webAppUrl = buildWebAppUrlForPhrase(phrase);
+    console.log("[share] prepared payload", {
+      chatId: telegram.id,
+      captionLength: caption.length,
+      webAppUrl,
+      useWebAppButton: TELEGRAM_USE_WEB_APP_BUTTON,
+      shortName: TELEGRAM_WEBAPP_SHORT_NAME,
+    });
+
+    const replyMarkup = TELEGRAM_USE_WEB_APP_BUTTON
+      ? {
+          inline_keyboard: [
+            [
+              {
+                text: "Open Slothary",
+                web_app: { url: webAppUrl },
+              },
+            ],
+          ],
+        }
+      : {
+          inline_keyboard: [
+            [
+              {
+                text: `Еще ${
+                  Math.max(
+                    (typeof body.examplesTotal === "number" && body.examplesTotal > 0
+                      ? body.examplesTotal
+                      : 30) - 1,
+                    0,
+                  )
+                } примеров в Slothary`,
+                url: webAppUrl,
+              },
+            ],
+          ],
+        };
+
+    if (videoUrl && isDirectVideoUrl(videoUrl)) {
+      await telegramApi("sendVideo", {
+        chat_id: telegram.id,
+        video: videoUrl,
+        caption,
+        parse_mode: "HTML",
+        supports_streaming: true,
+        reply_markup: replyMarkup,
+      });
+      res.json({ ok: true, mode: "video-url" });
+      return;
+    }
+
+    if (videoUrl && isHlsUrl(videoUrl) && startSeconds !== undefined) {
+      try {
+        console.log("[share] generating clip via ffmpeg", {
+          videoUrl,
+          startSeconds,
+          endSeconds,
+        });
+        const buffer = await generateMp4Clip(
+          videoUrl,
+          startSeconds,
+          endSeconds,
+        );
+        await sendTelegramVideoFile(telegram.id, caption, replyMarkup, buffer);
+        res.json({ ok: true, mode: "video-clip" });
+        return;
+      } catch (clipError: any) {
+        console.error("[share] clip generation failed", {
+          message: clipError?.message,
+        });
+      }
+    }
+
+    if (videoUrl) {
+      console.log("[share] skip sendVideo: unsupported video url", { videoUrl });
+    }
+    {
+      await telegramApi("sendMessage", {
+        chat_id: telegram.id,
+        text: caption,
+        parse_mode: "HTML",
+        reply_markup: replyMarkup,
+      });
+      res.json({ ok: true, mode: "text" });
+      return;
+    }
+  } catch (error: any) {
+    console.error("[share] sendPhraseShare error", {
       message: error?.message,
       status: error?.status,
     });
