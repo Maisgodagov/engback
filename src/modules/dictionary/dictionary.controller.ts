@@ -120,3 +120,26 @@ export const remove = async (req: Request, res: Response) => {
   res.status(204).end();
 };
 
+export const translatePhrase = async (req: Request, res: Response) => {
+  const text = typeof req.query.text === 'string' ? req.query.text.trim() : '';
+  const from = typeof req.query.from === 'string' ? req.query.from.trim() : 'en';
+  const to = typeof req.query.to === 'string' ? req.query.to.trim() : 'ru';
+
+  if (!text) {
+    res.status(400).json({ message: 'Missing text' });
+    return;
+  }
+  if (text.length > 300) {
+    res.status(400).json({ message: 'Text is too long' });
+    return;
+  }
+
+  try {
+    const translation = await dictionaryService.translatePhrase(text, from, to);
+    res.json({ translation });
+  } catch (error: any) {
+    const message = error?.message ?? 'Translation error';
+    res.status(error?.status ?? 502).json({ message });
+  }
+};
+

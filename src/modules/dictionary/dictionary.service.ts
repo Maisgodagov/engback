@@ -12,6 +12,17 @@ type DictionaryEntryResponse = {
   updatedAt: Date;
 };
 
+type MyMemoryResponse = {
+  responseData?: { translatedText?: string };
+  responseStatus?: number;
+  responseDetails?: string;
+};
+
+const PHRASE_TRANSLATION_TTL_MS = 1000 * 60 * 60 * 24;
+const phraseTranslationCache = new Map<string, { value: string; expiresAt: number }>();
+const normalizeCacheKey = (text: string) => text.trim().toLowerCase();
+const MYMEMORY_EMAIL = process.env.MYMEMORY_EMAIL ?? '';
+
 const getOtherTranslations = (
   cache: { query: string; lang: string; response: unknown } | null,
   primaryWord: string,
@@ -61,6 +72,48 @@ const getPrimaryTranslation = (
 };
 
 export const dictionaryService = {
+  async translatePhrase(text: string, from = 'en', to = 'ru'): Promise<string> {
+    const normalizedText = text.trim();
+    if (!normalizedText) {
+      throw Object.assign(new Error('Text is required'), { status: 400 });
+    }
+    const cacheKey = `${from}|${to}|${normalizeCacheKey(normalizedText)}`;
+    const cached = phraseTranslationCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+
+    const url = new URL('https://api.mymemory.translated.net/get');
+    url.searchParams.set('q', normalizedText);
+    url.searchParams.set('langpair', `${from}|${to}`);
+    if (MYMEMORY_EMAIL) {
+      url.searchParams.set('de', MYMEMORY_EMAIL);
+    }
+
+    const response = await fetch(url.toString(), {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) {
+      throw Object.assign(
+        new Error(`MyMemory error: ${response.status} ${response.statusText}`),
+        { status: 502 },
+      );
+    }
+    const data = (await response.json()) as MyMemoryResponse;
+    const status = typeof data.responseStatus === 'number' ? data.responseStatus : 0;
+    if (status !== 200) {
+      const details = data.responseDetails || 'MyMemory error';
+      throw Object.assign(new Error(details), { status: 502 });
+    }
+    const translatedText = data.responseData?.translatedText?.trim() ?? '';
+    if (translatedText) {
+      phraseTranslationCache.set(cacheKey, {
+        value: translatedText,
+        expiresAt: Date.now() + PHRASE_TRANSLATION_TTL_MS,
+      });
+    }
+    return translatedText;
+  },
   async list(userId: string, limit?: number, offset?: number) {
     // CRITICAL FIX: Add pagination to prevent loading 10,000+ words at once
     const take = limit && limit > 0 ? Math.min(limit, 500) : 100; // Default 100, max 500
