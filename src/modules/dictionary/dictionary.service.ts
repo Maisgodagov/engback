@@ -87,6 +87,22 @@ export const dictionaryService = {
     if (cached && cached.expiresAt > Date.now()) {
       return cached.value;
     }
+    const cachedDb = await prisma.phraseTranslationCache.findUnique({
+      where: {
+        query_sourceLang_targetLang: {
+          query: normalizedText,
+          sourceLang: from,
+          targetLang: to,
+        },
+      },
+    });
+    if (cachedDb?.translation) {
+      phraseTranslationCache.set(cacheKey, {
+        value: cachedDb.translation,
+        expiresAt: Date.now() + PHRASE_TRANSLATION_TTL_MS,
+      });
+      return cachedDb.translation;
+    }
 
     const response = await fetch(
       'https://translate.api.cloud.yandex.net/translate/v2/translate',
@@ -125,6 +141,24 @@ export const dictionaryService = {
     const translatedText = data.translations?.[0]?.text?.trim() ?? '';
 
     if (translatedText) {
+      await prisma.phraseTranslationCache.upsert({
+        where: {
+          query_sourceLang_targetLang: {
+            query: normalizedText,
+            sourceLang: from,
+            targetLang: to,
+          },
+        },
+        update: {
+          translation: translatedText,
+        },
+        create: {
+          query: normalizedText,
+          sourceLang: from,
+          targetLang: to,
+          translation: translatedText,
+        },
+      });
       phraseTranslationCache.set(cacheKey, {
         value: translatedText,
         expiresAt: Date.now() + PHRASE_TRANSLATION_TTL_MS,

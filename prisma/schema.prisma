@@ -556,6 +556,20 @@ model YandexDictionaryCache {
   @@map("yandex_dictionary_cache")
 }
 
+model PhraseTranslationCache {
+  id         Int      @id @default(autoincrement())
+  query      String   @db.VarChar(500)
+  sourceLang String   @map("source_lang") @db.VarChar(10)
+  targetLang String   @map("target_lang") @db.VarChar(10)
+  translation String  @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([query, sourceLang, targetLang], map: "uniq_phrase_query_langs")
+  @@index([query], map: "idx_phrase_query")
+  @@map("phrase_translation_cache")
+}
+
 model ReadingBook {
   id          String   @id @default(cuid())
   title       String   @db.VarChar(255)
