@@ -2010,7 +2010,6 @@ type ChunkSearchRecord = {
   videoUrl: string | null;
   transcript_word_chunks: unknown;
   transcriptChunks: unknown;
-  transcriptTranslationChunks: unknown;
   durationSeconds: number | null;
   audioLevel: number | null;
   author: string | null;
@@ -2029,7 +2028,6 @@ const buildSnippetsFromRecord = (
   if (!matches.length) return [];
 
   const sentenceChunks = parseChunkArray(record.transcriptChunks);
-  const translationChunks = parseChunkArray(record.transcriptTranslationChunks);
 
   const snippets: PhraseSnippet[] = [];
   for (const match of matches) {
@@ -2094,15 +2092,6 @@ const buildSnippetsFromRecord = (
             CONTEXT_WINDOW
           );
 
-    const translationMatchedText =
-      translationChunks.length && sentenceIndexes.length
-        ? buildTextFromChunkIndexes(translationChunks, sentenceIndexes)
-        : "";
-    const translationContextText =
-      translationChunks.length && englishContextIndexes.length
-        ? buildTextFromChunkIndexes(translationChunks, englishContextIndexes)
-        : translationMatchedText;
-
     snippets.push({
       id: `${record.id}-${match.startIndex}-${match.endIndex}`,
       contentId: record.id.toString(),
@@ -2118,8 +2107,6 @@ const buildSnippetsFromRecord = (
         typeof record.audioLevel === "number" && Number.isFinite(record.audioLevel)
           ? record.audioLevel
           : undefined,
-      translationMatchedText: translationMatchedText || undefined,
-      translationContextText: translationContextText || undefined,
     });
   }
   return snippets;
@@ -2360,7 +2347,6 @@ const runChunkSearch = async (
         videoUrl: true,
         transcript_word_chunks: true,
         transcriptChunks: true,
-        transcriptTranslationChunks: true,
         durationSeconds: true,
         audioLevel: true,
         author: true,
