@@ -340,7 +340,7 @@ const TOKEN_INSERT_BATCH_SIZE = 250;
 const TOKEN_TEXT_LIMIT = 120;
 const TOKEN_CANDIDATE_BATCH_SIZE = 200;
 const MAX_TOKEN_CANDIDATE_BATCHES = 200;
-const FULLTEXT_CANDIDATE_LIMIT = 2000;
+const FULLTEXT_CANDIDATE_LIMIT = 1200;
 const RANDOM_CONTENT_POOL_SIZE = 20000;
 const RANDOM_PRIORITY_JITTER = 12;
 const UNWATCHED_POOL_MULTIPLIER = 6;
@@ -1605,7 +1605,7 @@ const fetchCandidateIdsByFulltext = async (
     SELECT id
     FROM video_learning_content
     WHERE MATCH(transcript_full) AGAINST(${searchQuery} IN NATURAL LANGUAGE MODE)
-    ORDER BY RAND()
+    ORDER BY MATCH(transcript_full) AGAINST(${searchQuery} IN NATURAL LANGUAGE MODE) DESC
     LIMIT ${limit}
   `;
   return rows.map((row) => row.id);
@@ -2188,6 +2188,10 @@ const searchPhrase = async (
   const candidateIdsByFulltext = searchQuery
     ? await fetchCandidateIdsByFulltext(searchQuery, FULLTEXT_CANDIDATE_LIMIT)
     : [];
+  if (!candidateIdsByFulltext.length && normalizedTokens.length >= 4) {
+    triggerTranscriptTokenBackfill();
+    return paginateSnippets(trimmed, [], pageSize, cursorOffset, snippetCap);
+  }
   const diversifiedIds =
     candidateIdsByFulltext.length > 0
       ? await diversifyCandidateIdsByAuthor(candidateIdsByFulltext, 3)
