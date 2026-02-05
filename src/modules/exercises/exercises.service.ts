@@ -214,9 +214,9 @@ export const exercisesService = {
     try {
       await prisma.$executeRaw(Prisma.sql`
         UPDATE user_word_progress AS uwp
-        INNER JOIN mueller_word_index AS mw ON uwp.word_id = mw.id
+        INNER JOIN mueller_dictionary AS md ON uwp.word_id = md.id
         INNER JOIN yandex_dictionary_cache AS ydc
-          ON ydc.query = mw.word AND ydc.lang = 'en'
+          ON ydc.query = md.word AND ydc.lang = 'en'
         SET uwp.word_id = ydc.id
         WHERE uwp.user_id = ${userId}
       `);
