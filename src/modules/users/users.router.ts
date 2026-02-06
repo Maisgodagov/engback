@@ -8,5 +8,4 @@ usersRouter.get('/', usersController.list);
 usersRouter.get('/streak/history', usersController.getStreakHistory);
 usersRouter.post('/streak/refresh', usersController.refreshStreak);
 usersRouter.post('/xp', usersController.addXp);
-usersRouter.post('/streak/refresh', usersController.refreshStreak);
 

@@ -1,10 +1,13 @@
-import { Prisma } from "@prisma/client";
+import { Prisma } from '@prisma/client';
 
-import { prisma } from "../../shared/prisma/prismaClient";
-import {
-  buildYandexEntries,
-  type YandexDictResponse,
-} from "../mueller/mueller.service";
+import { prisma } from '../../shared/prisma/prismaClient';
+
+type DbWordRow = {
+  wordId: number;
+  word: string;
+  partOfSpeech: string | null;
+  translations: string | null;
+};
 
 type DbProgressRow = {
   word_id: number;
@@ -23,7 +26,7 @@ type Progress = {
   addedToVocab: boolean;
 };
 
-type ExerciseDirection = "en-ru" | "ru-en";
+type ExerciseDirection = 'en-ru' | 'ru-en';
 
 type Exercise = {
   wordId: number;
@@ -33,64 +36,18 @@ type Exercise = {
   prompt: string;
   correctAnswer: string;
   options: string[];
-  poolSize: number;
   translations: string[];
   progress: Progress;
 };
 
 const MAX_WORD_LIMIT = 100;
 const MAX_EXERCISE_LIMIT = 80;
-const TOUCH_GOAL = 3;
-const EXERCISE_STOP_WORDS = new Set([
-  "i",
-  "you",
-  "he",
-  "she",
-  "it",
-  "we",
-  "they",
-  "my",
-  "your",
-  "his",
-  "her",
-  "its",
-  "our",
-  "their",
-  "me",
-  "him",
-  "us",
-  "them",
-  "in",
-  "on",
-  "at",
-  "by",
-  "for",
-  "of",
-  "with",
-  "to",
-  "the",
-  "into",
-  "and",
-  "that",
-  "hey",
-  "this",
-  "huh",
-  "Oh",
-  "yeah",
-  "about",
-  "be",
-  "would",
-  "were",
-  "been",
-  "have",
-  "going",
-  "oh",
-]);
+const TOUCH_GOAL = 5;
 
 const uniqStrings = (values: string[]): string[] => {
   const set = new Set<string>();
   values.forEach((value) => {
-    if (value && typeof value === "string") {
+    if (value && typeof value === 'string') {
       const trimmed = value.trim();
       if (trimmed) set.add(trimmed);
     }
@@ -107,29 +64,15 @@ const shuffleArray = <T>(input: T[]): T[] => {
   return arr;
 };
 
-const parseYandexTranslations = (
-  query: string,
-  response: YandexDictResponse,
-): {
-  word: string;
-  translations: string[];
-  partOfSpeech: string | null;
-} | null => {
-  const entries = buildYandexEntries(query, "en", response);
-  if (!entries.length) return null;
-  const entry = entries[0];
-  return {
-    word: entry.word,
-    translations: entry.translations,
-    partOfSpeech: entry.partOfSpeech ?? null,
-  };
+const parseTranslations = (value: string | null): string[] => {
+  if (!value) return [];
+  return value
+    .split('||')
+    .map((item) => item.trim())
+    .filter(Boolean);
 };
 
-const buildOptions = (
-  correct: string,
-  pool: string[],
-  extras: string[] = [],
-): string[] => {
+const buildOptions = (correct: string, pool: string[], extras: string[] = []): string[] => {
   const seen = new Set<string>();
   const options: string[] = [];
   const combined = shuffleArray([...extras, ...pool]);
@@ -142,20 +85,17 @@ const buildOptions = (
     if (!normalized || seen.has(normalized)) continue;
     options.push(normalized);
     seen.add(normalized);
-    if (options.length >= 7) break;
+    if (options.length >= 3) break;
   }
 
-  while (options.length < 7) {
+  while (options.length < 3) {
     options.push(correct);
   }
 
   return shuffleArray(options);
 };
 
-const fetchProgress = async (
-  userId: string,
-  wordId: number,
-): Promise<Progress> => {
+const fetchProgress = async (userId: string, wordId: number): Promise<Progress> => {
   const [row] = await prisma.$queryRaw<DbProgressRow[]>(Prisma.sql`
     SELECT word_id, status, touches_total, touches_correct, streak, added_to_vocab
     FROM user_word_progress
@@ -164,7 +104,7 @@ const fetchProgress = async (
   `);
 
   return {
-    status: row?.status ?? "new",
+    status: row?.status ?? 'new',
     touchesTotal: Number(row?.touches_total ?? 0),
     touchesCorrect: Number(row?.touches_correct ?? 0),
     streak: Number(row?.streak ?? 0),
@@ -180,48 +120,23 @@ export const exercisesService = {
     });
     return rows;
   },
-
   async getExercisesForUser(
     userId: string,
     wordIds: number[],
     wordLimit?: number,
     exerciseLimit?: number,
   ): Promise<Exercise[]> {
-    console.log(`[EXERCISES] Received request for userId: ${userId}`);
-    console.log(`[EXERCISES] Total wordIds: ${wordIds.length}`);
-    console.log(`[EXERCISES] First 20 wordIds:`, wordIds.slice(0, 20));
 
-    const uniqueIds = Array.from(
-      new Set(wordIds.map((id) => Number(id)).filter(Number.isInteger)),
-    );
-    console.log(`[EXERCISES] Unique wordIds: ${uniqueIds.length}`);
+    const uniqueIds = Array.from(new Set(wordIds.map((id) => Number(id)).filter(Number.isInteger)));
 
     const effectiveWordLimit = Math.min(
       MAX_WORD_LIMIT,
       wordLimit && wordLimit > 0 ? wordLimit : uniqueIds.length,
     );
     const limitedWordIds = uniqueIds.slice(0, effectiveWordLimit);
-    console.log(
-      `[EXERCISES] Limited to ${limitedWordIds.length} words (limit: ${effectiveWordLimit})`,
-    );
 
     if (!limitedWordIds.length) {
-      console.log(`[EXERCISES] No valid wordIds, returning empty array`);
       return [];
-    }
-
-    // Remap legacy progress entries (mueller ids) to Yandex cache ids.
-    try {
-      await prisma.$executeRaw(Prisma.sql`
-        UPDATE user_word_progress AS uwp
-        INNER JOIN mueller_dictionary AS md ON uwp.word_id = md.id
-        INNER JOIN yandex_dictionary_cache AS ydc
-          ON ydc.query = md.word AND ydc.lang = 'en'
-        SET uwp.word_id = ydc.id
-        WHERE uwp.user_id = ${userId}
-      `);
-    } catch (err) {
-      console.warn("[EXERCISES] Failed to remap legacy progress rows", err);
     }
 
     const progressRows = await prisma.$queryRaw<DbProgressRow[]>(Prisma.sql`
@@ -232,33 +147,27 @@ export const exercisesService = {
 
     const excludedIds = new Set(
       progressRows
-        .filter((row) => row.status === "known" || row.status === "ignored")
+        .filter((row) => row.status === 'known' || row.status === 'ignored')
         .map((row) => Number(row.word_id)),
     );
 
     const candidateIds = limitedWordIds.filter((id) => !excludedIds.has(id));
-    console.log(
-      `[EXERCISES] After filtering known/ignored: ${candidateIds.length} candidates`,
-    );
-    console.log(
-      `[EXERCISES] Candidate IDs (first 20):`,
-      candidateIds.slice(0, 20),
-    );
 
     if (!candidateIds.length) {
-      console.log(
-        `[EXERCISES] No candidate words after filtering, returning empty`,
-      );
       return [];
     }
 
-    const cacheRows = await prisma.yandexDictionaryCache.findMany({
-      where: { id: { in: candidateIds }, lang: "en" },
-      select: { id: true, query: true, response: true },
-    });
+    const wordRows = await prisma.$queryRaw<DbWordRow[]>(Prisma.sql`
+      SELECT
+        m.id AS wordId,
+        m.word,
+        m.part_of_speech AS partOfSpeech,
+        m.translations
+      FROM mueller_dictionary m
+      WHERE m.id IN (${Prisma.join(candidateIds)})
+    `);
 
-    if (!cacheRows.length) {
-      console.log(`[EXERCISES] No Yandex cache rows for given IDs`);
+    if (!wordRows.length) {
       return [];
     }
 
@@ -271,97 +180,131 @@ export const exercisesService = {
     const progressByWord = new Map<number, Progress>();
     progressRows.forEach((row) => {
       const progress: Progress = {
-        status: row.status ?? "new",
+        status: row.status ?? 'new',
         touchesTotal: Number(row.touches_total ?? 0),
         touchesCorrect: Number(row.touches_correct ?? 0),
         streak: Number(row.streak ?? 0),
-        addedToVocab:
-          Boolean(row.added_to_vocab) || vocabSet.has(Number(row.word_id)),
+        addedToVocab: Boolean(row.added_to_vocab) || vocabSet.has(Number(row.word_id)),
       };
       progressByWord.set(Number(row.word_id), progress);
     });
 
-    const poolSource = await prisma.yandexDictionaryCache.findMany({
-      where: { lang: "en" },
-      select: { query: true, response: true },
-      take: 2000,
-    });
+    // Use offset-based randomization instead of ORDER BY RAND() for better performance
+    const randomOffset1 = Math.floor(Math.random() * 1000);
+    const randomOffset2 = Math.floor(Math.random() * 1000);
 
-    const translationPool = uniqStrings(
-      poolSource
-        .map((row) => {
-          const parsed = parseYandexTranslations(
-            row.query,
-            row.response as YandexDictResponse,
-          );
-          return parsed?.translations?.[0] ?? null;
-        })
-        .filter(Boolean) as string[],
-    );
+    const translationPoolRows = await prisma.$queryRaw<{ translations: string }[]>(Prisma.sql`
+      SELECT translations
+      FROM mueller_dictionary
+      WHERE id NOT IN (${Prisma.join(candidateIds)})
+      LIMIT 200 OFFSET ${randomOffset1}
+    `);
+
+    const wordPoolRows = await prisma.$queryRaw<{ word: string }[]>(Prisma.sql`
+      SELECT word
+      FROM mueller_dictionary
+      WHERE id NOT IN (${Prisma.join(candidateIds)})
+      LIMIT 200 OFFSET ${randomOffset2}
+    `);
+
+    const translationPool = uniqStrings([
+      ...translationPoolRows.flatMap((row) => parseTranslations(row.translations)),
+      ...wordRows.flatMap((row) => parseTranslations(row.translations)),
+    ]);
+
+    const wordPool = uniqStrings([
+      ...wordPoolRows.map((row) => row.word),
+      ...wordRows.map((row) => row.word),
+    ]);
 
     const maxExercises = Math.min(
       MAX_EXERCISE_LIMIT,
-      exerciseLimit && exerciseLimit > 0
-        ? exerciseLimit
-        : candidateIds.length * 2,
+      exerciseLimit && exerciseLimit > 0 ? exerciseLimit : candidateIds.length * 2,
     );
 
+    const exerciseKeys = new Set<string>();
     const exercises: Exercise[] = [];
 
-    for (const row of cacheRows) {
+    for (const row of wordRows) {
       if (exercises.length >= maxExercises) break;
-      const parsed = parseYandexTranslations(
-        row.query,
-        row.response as YandexDictResponse,
-      );
-      if (!parsed || parsed.translations.length === 0) continue;
 
-      const normalizedWord = parsed.word?.trim().toLowerCase();
-      if (!normalizedWord || EXERCISE_STOP_WORDS.has(normalizedWord)) continue;
+      const translations = parseTranslations(row.translations);
+      if (!translations.length) continue;
 
-      const correctRu = parsed.translations[0] ?? "";
-      if (!correctRu) continue;
-
-      const progress = progressByWord.get(row.id) ?? {
-        status: "new",
+      const correctRu = translations[0];
+      const progress = progressByWord.get(row.wordId) ?? {
+        status: 'new',
         touchesTotal: 0,
         touchesCorrect: 0,
         streak: 0,
-        addedToVocab: vocabSet.has(row.id),
+        addedToVocab: vocabSet.has(row.wordId),
       };
 
-      const optionPool = buildOptions(
-        correctRu,
-        translationPool.filter((item) => item !== correctRu),
-      );
+      // Randomize direction generation:
+      // 75% chance: only one direction (randomly chosen)
+      // 25% chance: both directions
+      const random = Math.random();
+      const generateBoth = random < 0.25; // 25% chance for both
+      const generateEnRu = generateBoth || random >= 0.625; // 25% both + 37.5% only en-ru = 62.5%
+      const generateRuEn = generateBoth || (random >= 0.25 && random < 0.625); // 25% both + 37.5% only ru-en = 62.5%
 
-      exercises.push({
-        wordId: row.id,
-        word: parsed.word,
-        partOfSpeech: parsed.partOfSpeech,
-        direction: "en-ru",
-        prompt: parsed.word,
-        correctAnswer: correctRu,
-        options: optionPool,
-        poolSize: optionPool.length,
-        translations: parsed.translations.slice(0, 3),
-        progress: {
-          ...progress,
-          addedToVocab: progress.addedToVocab || vocabSet.has(row.id),
-        },
-      });
+      if (generateEnRu) {
+        const enRuKey = `${row.wordId}-en-ru`;
+        if (!exerciseKeys.has(enRuKey)) {
+          exerciseKeys.add(enRuKey);
+
+          const enRuOptions = buildOptions(
+            correctRu,
+            translationPool.filter((item) => item !== correctRu),
+            translations.slice(1),
+          );
+
+          exercises.push({
+            wordId: row.wordId,
+            word: row.word,
+            partOfSpeech: row.partOfSpeech,
+            direction: 'en-ru',
+            prompt: row.word,
+            correctAnswer: correctRu,
+            options: enRuOptions,
+            translations: [correctRu],
+            progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
+          });
+        }
+      }
+
+      if (exercises.length >= maxExercises) break;
+
+      if (generateRuEn) {
+        const ruEnKey = `${row.wordId}-ru-en`;
+        if (!exerciseKeys.has(ruEnKey)) {
+          exerciseKeys.add(ruEnKey);
+
+          const ruEnOptions = buildOptions(
+            row.word,
+            wordPool.filter((item) => item !== row.word),
+          );
+
+          exercises.push({
+            wordId: row.wordId,
+            word: row.word,
+            partOfSpeech: row.partOfSpeech,
+            direction: 'ru-en',
+            prompt: correctRu,
+            correctAnswer: row.word,
+            options: ruEnOptions,
+            translations: [correctRu],
+            progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
+          });
+        }
+      }
     }
 
     const finalExercises = shuffleArray(exercises.slice(0, maxExercises));
-    console.log(`[EXERCISES] Returning ${finalExercises.length} exercises`);
     return finalExercises;
   },
 
-  async submitAnswer(
-    userId: string,
-    wordId: number,
-    isCorrect: boolean,
-  ): Promise<Progress> {
+  async submitAnswer(userId: string, wordId: number, isCorrect: boolean): Promise<Progress> {
     const isCorrectInt = isCorrect ? 1 : 0;
 
     await prisma.$executeRaw(Prisma.sql`
@@ -386,6 +329,7 @@ export const exercisesService = {
         END;
     `);
 
+    // Fetch updated progress - needed to return accurate values after update
     return fetchProgress(userId, wordId);
   },
 
@@ -403,11 +347,7 @@ export const exercisesService = {
     return fetchProgress(userId, wordId);
   },
 
-  async addToVocab(
-    userId: string,
-    wordId: number,
-    note?: string,
-  ): Promise<Progress> {
+  async addToVocab(userId: string, wordId: number, note?: string): Promise<Progress> {
     await prisma.$executeRaw(Prisma.sql`
       INSERT INTO user_vocab (user_id, word_id, note)
       VALUES (${userId}, ${wordId}, ${note ?? null})

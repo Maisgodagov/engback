@@ -25,16 +25,9 @@ const getUserId = (req: Request): string | null => {
 };
 
 export const list = async (req: Request, res: Response) => {
-  console.log('[Dictionary] === REQUEST RECEIVED ===');
-  console.log('[Dictionary] Headers:', req.headers);
-  console.log('[Dictionary] Query:', req.query);
-  console.log('[Dictionary] Body:', req.body);
-
   const userId = getUserId(req);
-  console.log('[Dictionary] Extracted userId:', userId);
 
   if (!userId) {
-    console.log('[Dictionary] ERROR: No userId found');
     res.status(401).json({ message: 'Missing user identifier' });
     return;
   }
@@ -44,11 +37,6 @@ export const list = async (req: Request, res: Response) => {
   const offset = req.query.offset ? parseInt(req.query.offset as string, 10) : undefined;
 
   const items = await dictionaryService.list(userId, limit, offset);
-  console.log('[Dictionary] Found items:', items.length);
-  if (items.length > 0) {
-    console.log('[Dictionary] First item:', items[0]);
-  }
-  console.log('[Dictionary] Sending response...');
   res.json(items);
 };
 

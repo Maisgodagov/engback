@@ -389,6 +389,27 @@ const lruCache = new LRUCache<string, any>({
   ttl: 1000 * 60 * 5, // Default TTL: 5 minutes
 });
 
+// Short-lived cache for phrase search results to reduce heavy DB work
+const searchCache = new LRUCache<string, { snippets: PhraseSnippet[]; snippetCap: number }>({
+  max: 300,
+  maxSize: 20_000_000,
+  sizeCalculation: (value) => JSON.stringify(value).length,
+  ttl: 1000 * 30, // 30 seconds
+});
+
+const buildSearchCacheKey = (params: {
+  phrase: string;
+  paddingSeconds: number;
+  snippetCap: number;
+  sampleSize?: number;
+}) =>
+  [
+    params.phrase.trim().toLowerCase(),
+    params.paddingSeconds,
+    params.snippetCap,
+    params.sampleSize ?? "auto",
+  ].join("|");
+
 const findPhraseMatches = (
   wordChunks: TranscriptWordChunk[],
   normalizedTokens: string[]
@@ -726,6 +747,56 @@ const mapContentRecord = (
 };
 
 type ModerationFilter = "all" | "moderated" | "unmoderated";
+type FeedCursor = { score: number; id: number } | null;
+
+const FEED_BUCKET_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
+const FEED_BUCKET_MAX_ITEMS = 5000;
+const FEED_BATCH_MULTIPLIER = 5;
+const FEED_MAX_FETCH_LOOPS = 6;
+
+const parseFeedCursor = (cursor?: string | null): FeedCursor => {
+  if (!cursor) return null;
+  const trimmed = cursor.trim();
+  const match = trimmed.match(/^(-?\d+(\.\d+)?):(\d+)$/);
+  if (!match) return null;
+  const score = Number(match[1]);
+  const id = Number(match[3]);
+  if (!Number.isFinite(score) || !Number.isInteger(id) || id <= 0) return null;
+  return { score, id };
+};
+
+const formatFeedCursor = (cursor: FeedCursor): string | null => {
+  if (!cursor) return null;
+  const rounded = Math.round(cursor.score * 1000000) / 1000000;
+  return `${rounded}:${cursor.id}`;
+};
+
+const buildBucketKey = (params: {
+  cefrLevels?: string;
+  speechSpeeds?: string;
+  showAdultContent?: boolean;
+  moderationFilter?: ModerationFilter;
+}): string => {
+  const cefr = params.cefrLevels
+    ? params.cefrLevels
+        .split(",")
+        .map((v) => v.trim().toUpperCase())
+        .filter(Boolean)
+        .sort()
+        .join(",")
+    : "all";
+  const speeds = params.speechSpeeds
+    ? params.speechSpeeds
+        .split(",")
+        .map((v) => v.trim().toLowerCase())
+        .filter(Boolean)
+        .sort()
+        .join(",")
+    : "all";
+  const adult = params.showAdultContent === false ? "no-adult" : "adult-ok";
+  const mod = params.moderationFilter ?? "moderated";
+  return `cefr=${cefr}|speed=${speeds}|mod=${mod}|adult=${adult}`;
+};
 
 // Cache helper functions for performance optimization
 const getCachedTopicPreferences = async (
@@ -791,11 +862,98 @@ const getCachedProgress = async (
   return data;
 };
 
+const getCachedSeen = async (
+  userId: string
+): Promise<Array<{ contentId: number }>> => {
+  const cacheKey = `seen:${userId}`;
+  const cached = lruCache.get(cacheKey) as
+    | Array<{ contentId: number }>
+    | undefined;
+
+  if (cached) return cached;
+
+  const data = await prisma.userSeenContent.findMany({
+    where: { userId },
+    select: { contentId: true },
+    orderBy: { seenAt: "desc" },
+    take: MAX_USER_HISTORY,
+  });
+
+  lruCache.set(cacheKey, data, { ttl: 1000 * 60 * 2 }); // 2 min
+  return data;
+};
+
 // Invalidate user cache (call after likes/progress updates)
 const invalidateUserCache = (userId: string) => {
   lruCache.delete(`topics:${userId}`);
   lruCache.delete(`likes:${userId}`);
   lruCache.delete(`progress:${userId}`);
+  lruCache.delete(`seen:${userId}`);
+};
+
+const ensureFeedBucket = async (
+  bucketKey: string,
+  where: Prisma.VideoLearningContentWhereInput
+) => {
+  const existing = await prisma.videoFeedBucketItem.findFirst({
+    where: { bucketKey },
+    select: { id: true, updatedAt: true },
+  });
+  if (existing && Date.now() - existing.updatedAt.getTime() < FEED_BUCKET_TTL_MS) {
+    return;
+  }
+
+  // Remove stale bucket before rebuilding
+  await prisma.videoFeedBucketItem.deleteMany({ where: { bucketKey } });
+
+  const records = await prisma.videoLearningContent.findMany({
+    where,
+    select: { id: true, likesCount: true, processedAt: true },
+    orderBy: [{ likesCount: "desc" }, { id: "desc" }],
+    take: FEED_BUCKET_MAX_ITEMS,
+  });
+
+  const now = Date.now();
+  const items = records.map((record) => {
+    const likes = record.likesCount ?? 0;
+    const ageDays = record.processedAt
+      ? Math.max(0, (now - record.processedAt.getTime()) / 86400000)
+      : 0;
+    const recencyBoost = Math.max(0, 30 - ageDays) * 0.1;
+    const score = Math.log10(likes + 1) * 5 + recencyBoost;
+    return {
+      bucketKey,
+      contentId: record.id,
+      score,
+    };
+  });
+
+  if (items.length) {
+    await prisma.videoFeedBucketItem.createMany({ data: items });
+  }
+};
+
+const loadBucketItems = async (
+  bucketKey: string,
+  cursor: FeedCursor,
+  take: number
+) => {
+  const where: Prisma.VideoFeedBucketItemWhereInput = {
+    bucketKey,
+    ...(cursor
+      ? {
+          OR: [
+            { score: { lt: cursor.score } },
+            { score: cursor.score, contentId: { lt: cursor.id } },
+          ],
+        }
+      : {}),
+  };
+  return prisma.videoFeedBucketItem.findMany({
+    where,
+    orderBy: [{ score: "desc" }, { contentId: "desc" }],
+    take,
+  });
 };
 
 const computeRecommendationScores = async (
@@ -1124,52 +1282,137 @@ const getFeed = async (
   hasMore: boolean;
 }> => {
   const normalizedLimit = limit && limit > 0 ? limit : 1;
+  const parsedCursor = parseFeedCursor(cursor);
 
-  // PROTECTION: Limit cursor size to prevent memory/performance issues
-  // For infinite scroll, we don't need to track ALL seen videos forever
+  const userRoleIsAdmin = isAdmin;
+  const effectiveModerationFilter =
+    moderationFilter ?? (userRoleIsAdmin ? "all" : "moderated");
 
-  const excludeIds = new Set<number>();
-  if (cursor) {
-    const parsedIds = cursor
+  const baseWhere: Prisma.VideoLearningContentWhereInput = {};
+  if (cefrLevels) {
+    const levels = cefrLevels
       .split(",")
-      .map((value) => Number.parseInt(value.trim(), 10))
-      .filter((value) => Number.isInteger(value) && value > 0);
-
-    // Only keep the most recent IDs if cursor is too large
-    const idsToUse =
-      parsedIds.length > MAX_CURSOR_IDS
-        ? parsedIds.slice(-MAX_CURSOR_IDS) // Keep last N IDs
-        : parsedIds;
-
-    idsToUse.forEach((value) => excludeIds.add(value));
+      .map((v) => v.trim().toUpperCase())
+      .filter(Boolean);
+    if (levels.length) {
+      baseWhere.cefrLevel = {
+        in: levels as VideoLearningContentCefrLevel[],
+      };
+    }
+  }
+  if (speechSpeeds) {
+    const speeds = speechSpeeds
+      .split(",")
+      .map((v) => v.trim().toLowerCase())
+      .filter(Boolean);
+    if (speeds.length) {
+      baseWhere.speechSpeed = {
+        in: speeds as VideoLearningContentSpeechSpeed[],
+      };
+    }
+  }
+  if (showAdultContent === false) {
+    baseWhere.isAdultContent = false;
+  }
+  if (effectiveModerationFilter === "moderated") {
+    baseWhere.isModerated = true;
+  } else if (effectiveModerationFilter === "unmoderated") {
+    baseWhere.isModerated = false;
   }
 
-  const { likedSet, statusMap, unwatched, watched } =
-    await computeRecommendationScores(
-      userId,
-      excludeIds,
-      cefrLevels,
-      speechSpeeds,
-      showAdultContent,
-      moderationFilter,
-      isAdmin,
-      normalizedLimit // Pass limit to optimize database query
+  const bucketKey = buildBucketKey({
+    cefrLevels,
+    speechSpeeds,
+    showAdultContent,
+    moderationFilter: effectiveModerationFilter,
+  });
+  await ensureFeedBucket(bucketKey, baseWhere);
+
+  const [likedRecords, topicPreferences, progressRecords, seenRecords] =
+    await Promise.all([
+      getCachedLikes(userId),
+      getCachedTopicPreferences(userId),
+      getCachedProgress(userId),
+      getCachedSeen(userId),
+    ]);
+
+  const likedSet = new Set(likedRecords.map((item) => item.contentId));
+  const statusMap = new Map(
+    progressRecords.map((p) => [p.contentId, p.status])
+  );
+  const seenSet = new Set(seenRecords.map((item) => item.contentId));
+
+  const topicScoreMap = new Map(
+    topicPreferences.map((item) => [item.topic, item.likes])
+  );
+
+  const batchSize = Math.max(normalizedLimit * FEED_BATCH_MULTIPLIER, 5);
+  let cursorState = parsedCursor;
+  const collected: Array<{
+    record: PoolRecord;
+    bucketScore: number;
+  }> = [];
+  let hasMore = false;
+
+  for (let loop = 0; loop < FEED_MAX_FETCH_LOOPS; loop += 1) {
+    const bucketItems = await loadBucketItems(bucketKey, cursorState, batchSize);
+    if (!bucketItems.length) {
+      hasMore = false;
+      break;
+    }
+
+    const contentIds = bucketItems.map((item) => item.contentId);
+    const records = await prisma.videoLearningContent.findMany({
+      where: { id: { in: contentIds } },
+      include: { videoTopics: { select: { topic: true } } },
+    });
+    const recordMap = new Map(records.map((record) => [record.id, record]));
+
+    bucketItems.forEach((item) => {
+      const record = recordMap.get(item.contentId);
+      if (!record) return;
+      if (seenSet.has(record.id)) return;
+      if (statusMap.get(record.id) === VideoLearningStatus.WATCHED) return;
+      collected.push({ record, bucketScore: item.score });
+    });
+
+    const last = bucketItems[bucketItems.length - 1];
+    cursorState = { score: last.score, id: last.contentId };
+    hasMore = bucketItems.length >= batchSize;
+
+    if (collected.length >= normalizedLimit) break;
+  }
+
+  if (!collected.length) {
+    return { items: [], nextCursor: formatFeedCursor(cursorState), hasMore };
+  }
+
+  const scored = collected.map(({ record, bucketScore }) => {
+    const topics = record.videoTopics.map((t) => t.topic);
+    const topicBoost = topics.reduce(
+      (sum, topic) => sum + (topicScoreMap.get(topic) ?? 0),
+      0
     );
+    const likedBoost = likedSet.has(record.id) ? 20 : 0;
+    const personalBoost = Math.min(20, topicBoost * 0.5);
+    return {
+      record,
+      score: bucketScore + personalBoost + likedBoost,
+    };
+  });
 
-  const combined = [...unwatched, ...watched];
-  if (!combined.length) {
-    return { items: [], nextCursor: null, hasMore: false };
-  }
+  scored.sort((a, b) => b.score - a.score);
+  const selected = scored.slice(0, normalizedLimit);
 
-  const selected = combined.slice(0, normalizedLimit);
-  const hasMore = combined.length > normalizedLimit;
-
-  const items: VideoFeedItem[] = selected.map(({ record, moderation }) => {
+  const items: VideoFeedItem[] = selected.map(({ record }) => {
     const { videoTopics: _topics, ...rest } = record;
     const processed = mapContentRecord(
       rest as ContentRecord,
       likedSet.has(record.id),
-      moderation
+      {
+        isAdultContent: record.isAdultContent ?? false,
+        isModerated: record.isModerated ?? false,
+      }
     );
     return {
       id: processed.id,
@@ -1188,27 +1431,9 @@ const getFeed = async (
     };
   });
 
-  // Build next cursor with size limit protection
-  const nextCursorSet = new Set<number>(excludeIds);
-  for (const item of selected) {
-    nextCursorSet.add(item.record.id);
-  }
-
-  // PROTECTION: Limit cursor size to prevent it from growing infinitely
-  const nextCursorIds = Array.from(nextCursorSet);
-  const limitedCursorIds =
-    nextCursorIds.length > MAX_CURSOR_IDS
-      ? nextCursorIds.slice(-MAX_CURSOR_IDS) // Keep last N IDs
-      : nextCursorIds;
-
-  const nextCursor =
-    hasMore && limitedCursorIds.length > 0
-      ? limitedCursorIds.sort((a, b) => a - b).join(",")
-      : null;
-
   return {
     items,
-    nextCursor,
+    nextCursor: formatFeedCursor(cursorState),
     hasMore,
   };
 };
@@ -2387,21 +2612,37 @@ const runChunkSearch = async (
     .map(normalizeToken)
     .filter((token) => token.length > 0);
 
-  if (!normalizedTokens.length) {
-    return {
-      phrase: trimmed,
-      items: [],
-      returned: 0,
-      total: 0,
-      hasMore: false,
-      nextCursor: null,
-      pageSize,
-    };
-  }
+    if (!normalizedTokens.length) {
+      return {
+        phrase: trimmed,
+        items: [],
+        returned: 0,
+        total: 0,
+        hasMore: false,
+        nextCursor: null,
+        pageSize,
+      };
+    }
 
     const snippetCap = Math.max(pageSize, sanitizeSnippetCap(maxSnippets));
     const cursorOffset = Math.min(sanitizeCursorOffset(cursor), snippetCap);
     const snippetPadding = sanitizePaddingSeconds(paddingSeconds);
+    const cacheKey = buildSearchCacheKey({
+      phrase: trimmed,
+      paddingSeconds: snippetPadding,
+      snippetCap,
+      sampleSize,
+    });
+    const cached = searchCache.get(cacheKey);
+    if (cached && cached.snippetCap >= snippetCap) {
+      return paginateSnippets(
+        trimmed,
+        cached.snippets,
+        pageSize,
+        cursorOffset,
+        snippetCap
+      );
+    }
     const searchQuery = trimmed.replace(/[+\-<>()~*"@]/g, " ").trim();
     const fulltextStart = Date.now();
     let candidateIdsByFulltext = searchQuery
@@ -2459,6 +2700,8 @@ const runChunkSearch = async (
       authorMap
     );
 
+    searchCache.set(cacheKey, { snippets: limitedSnippets, snippetCap });
+
     const result = paginateSnippets(
       trimmed,
       limitedSnippets,
@@ -2467,18 +2710,7 @@ const runChunkSearch = async (
       snippetCap
     );
     if (SEARCH_DEBUG) {
-      const totalMs = Date.now() - startedAt;
-      console.log("[VideoSearch] phrase search", {
-        phrase: trimmed,
-        tokens: normalizedTokens.length,
-        candidates: candidateIdsByFulltext.length,
-        sample: randomizedCandidates.length,
-        snippets: rawSnippets.length,
-        returned: result.returned,
-        fulltextMs,
-        chunkMs,
-        totalMs,
-      });
+      // debug logging disabled
     }
     return result;
   };
@@ -2591,6 +2823,14 @@ const getContentById = async (
     } catch (error) {
       // Ignore unique constraint errors from race conditions
     }
+
+    // Mark as seen
+    await prisma.userSeenContent.upsert({
+      where: { userId_contentId: { userId, contentId: numericId } },
+      update: { seenAt: new Date() },
+      create: { userId, contentId: numericId, seenAt: new Date() },
+    });
+    invalidateUserCache(userId);
 
     // OPTIMIZATION: Fetch like status (only 1 extra query, moderation is from record)
     const likeRecord = await prisma.videoLike.findUnique({
@@ -2962,6 +3202,13 @@ const submitProgress = async (
       score: correctCount,
     },
   });
+
+  await prisma.userSeenContent.upsert({
+    where: { userId_contentId: { userId, contentId: numericContentId } },
+    update: { seenAt: new Date() },
+    create: { userId, contentId: numericContentId, seenAt: new Date() },
+  });
+  invalidateUserCache(userId);
 
   return {
     total: exercises.length,

@@ -38,6 +38,7 @@ export const getFeed = async (req: Request, res: Response) => {
 
   // Parse pagination params
   const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 0;
+  const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 20) : 1;
   const cursor = req.query.cursor ? (req.query.cursor as string) : undefined;
   const cefrLevels = req.query.cefrLevels ? (req.query.cefrLevels as string) : undefined;
   const speechSpeeds = req.query.speechSpeeds ? (req.query.speechSpeeds as string) : undefined;
@@ -56,7 +57,7 @@ export const getFeed = async (req: Request, res: Response) => {
 
   const result = await videoLearningService.getFeed(
     userId,
-    limit,
+    safeLimit,
     cursor,
     cefrLevels,
     speechSpeeds,

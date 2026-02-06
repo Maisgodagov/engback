@@ -175,55 +175,87 @@ export const dictionaryService = {
     return translatedText;
   },
   async list(userId: string, limit?: number, offset?: number) {
-    // CRITICAL FIX: Add pagination to prevent loading 10,000+ words at once
+    // Unified pagination across words + phrases
     const take = limit && limit > 0 ? Math.min(limit, 500) : 100; // Default 100, max 500
     const skip = offset && offset > 0 ? offset : 0;
 
-    const result = await prisma.userWord.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      include: { yandexCache: true },
-      take,
-      skip,
-    });
-    const words = result.map((entry) => ({
-      type: 'word' as const,
-      id: entry.id,
-      word: entry.word,
-      translation: entry.translation,
-      otherTranslations: getOtherTranslations(
-        entry.yandexCache
-          ? {
-              query: entry.yandexCache.query,
-              lang: entry.yandexCache.lang,
-              response: entry.yandexCache.response,
-            }
-          : null,
-        entry.word,
-        entry.translation,
-      ),
-      createdAt: entry.createdAt,
-      updatedAt: entry.updatedAt,
-    })) as Array<DictionaryEntryResponse & { type: 'word' }>;
+    const rows = await prisma.$queryRaw<
+      Array<{ id: string; type: "word" | "phrase"; createdAt: Date }>
+    >(Prisma.sql`
+      SELECT id, 'word' AS type, created_at AS createdAt
+      FROM user_words
+      WHERE user_id = ${userId}
+      UNION ALL
+      SELECT id, 'phrase' AS type, created_at AS createdAt
+      FROM user_phrases
+      WHERE user_id = ${userId}
+      ORDER BY createdAt DESC
+      LIMIT ${take} OFFSET ${skip}
+    `);
 
-    const phraseRows = await prisma.userPhrase.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take,
-      skip,
-    });
-    const phrases = phraseRows.map((entry) => ({
-      type: 'phrase' as const,
-      id: entry.id,
-      phrase: entry.phrase,
-      translation: entry.translation,
-      createdAt: entry.createdAt,
-      updatedAt: entry.updatedAt,
-    })) as Array<PhraseEntryResponse & { type: 'phrase' }>;
+    if (!rows.length) return [];
 
-    return [...words, ...phrases].sort(
-      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+    const wordIds = rows.filter((row) => row.type === "word").map((row) => row.id);
+    const phraseIds = rows.filter((row) => row.type === "phrase").map((row) => row.id);
+
+    const [wordRows, phraseRows] = await Promise.all([
+      wordIds.length
+        ? prisma.userWord.findMany({
+            where: { id: { in: wordIds }, userId },
+            include: { yandexCache: true },
+          })
+        : Promise.resolve([]),
+      phraseIds.length
+        ? prisma.userPhrase.findMany({
+            where: { id: { in: phraseIds }, userId },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const wordMap = new Map(
+      wordRows.map((entry) => [
+        entry.id,
+        {
+          type: "word" as const,
+          id: entry.id,
+          word: entry.word,
+          translation: entry.translation,
+          otherTranslations: getOtherTranslations(
+            entry.yandexCache
+              ? {
+                  query: entry.yandexCache.query,
+                  lang: entry.yandexCache.lang,
+                  response: entry.yandexCache.response,
+                }
+              : null,
+            entry.word,
+            entry.translation,
+          ),
+          createdAt: entry.createdAt,
+          updatedAt: entry.updatedAt,
+        } as DictionaryEntryResponse & { type: "word" },
+      ]),
     );
+
+    const phraseMap = new Map(
+      phraseRows.map((entry) => [
+        entry.id,
+        {
+          type: "phrase" as const,
+          id: entry.id,
+          phrase: entry.phrase,
+          translation: entry.translation,
+          createdAt: entry.createdAt,
+          updatedAt: entry.updatedAt,
+        } as PhraseEntryResponse & { type: "phrase" },
+      ]),
+    );
+
+    return rows
+      .map((row) => (row.type === "word" ? wordMap.get(row.id) : phraseMap.get(row.id)))
+      .filter(Boolean) as Array<
+      (DictionaryEntryResponse & { type: "word" }) | (PhraseEntryResponse & { type: "phrase" })
+    >;
   },
 
   async create(userId: string, payload: CreateUserWordInput) {

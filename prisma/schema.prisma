@@ -29,6 +29,7 @@ model User {
   dictionaryViews       UserDictionaryView[]
   videoLearningProgress VideoLearningProgress[]
   videoLikes            VideoLike[]
+  videoSeen             UserSeenContent[]
   videoTopicPreferences VideoTopicPreference[]
   audioPhraseLevelProgress UserAudioPhraseLevelProgress[]
   audioPhraseSnippetProgress UserAudioPhraseSnippetProgress[]
@@ -248,6 +249,8 @@ model VideoLearningContent {
   progressEntries             VideoLearningProgress[]
   videoTopics                 VideoTopic[]
   likes                       VideoLike[]
+  seenEntries                 UserSeenContent[]
+  feedBucketItems             VideoFeedBucketItem[]
   transcriptTokens            VideoTranscriptToken[]
   gameSnippets                GameSnippet[]
 
@@ -260,6 +263,34 @@ model VideoLearningContent {
   @@index([isModerated], map: "idx_moderated")
   @@fulltext([transcriptFull], map: "idx_transcript_full_fulltext")
   @@map("video_learning_content")
+}
+
+model UserSeenContent {
+  id        Int                  @id @default(autoincrement())
+  userId    String               @map("user_id")
+  contentId Int                  @map("content_id")
+  seenAt    DateTime             @default(now()) @map("seen_at")
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content   VideoLearningContent @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contentId], map: "uniq_user_seen_content")
+  @@index([userId, seenAt], map: "idx_user_seen")
+  @@index([contentId], map: "idx_seen_content")
+  @@map("user_seen_content")
+}
+
+model VideoFeedBucketItem {
+  id        Int                  @id @default(autoincrement())
+  bucketKey String               @map("bucket_key") @db.VarChar(200)
+  contentId Int                  @map("content_id")
+  score     Float
+  createdAt DateTime             @default(now()) @map("created_at")
+  updatedAt DateTime             @default(now()) @updatedAt @map("updated_at")
+  content   VideoLearningContent @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@unique([bucketKey, contentId], map: "uniq_bucket_content")
+  @@index([bucketKey, score, contentId], map: "idx_bucket_score")
+  @@map("video_feed_bucket_items")
 }
 
 model VideoTranscriptToken {

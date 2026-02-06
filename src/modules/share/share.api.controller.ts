@@ -191,12 +191,6 @@ const telegramApi = async (method: string, payload: Record<string, unknown>) => 
   if (!TELEGRAM_BOT_TOKEN) {
     throw Object.assign(new Error("Missing TELEGRAM_BOT_TOKEN"), { status: 500 });
   }
-  console.log(`[share] telegramApi request ${method}`, {
-    chat_id: payload.chat_id,
-    hasVideo: Boolean((payload as any).video),
-    hasCaption: Boolean((payload as any).caption),
-    hasReplyMarkup: Boolean((payload as any).reply_markup),
-  });
   const response = await fetch(
     `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`,
     {
@@ -208,11 +202,6 @@ const telegramApi = async (method: string, payload: Record<string, unknown>) => 
   const data = (await response.json().catch(() => null)) as
     | { ok?: boolean; description?: string }
     | null;
-  console.log(`[share] telegramApi response ${method}`, {
-    status: response.status,
-    ok: data?.ok,
-    description: data?.description,
-  });
   if (!response.ok || !data?.ok) {
     const description =
       typeof data?.description === "string"
@@ -281,7 +270,6 @@ const generateMp4Clip = async (sourceUrl: string, start?: number, end?: number) 
     maxBuffer: 10 * 1024 * 1024,
   });
   if (stderr) {
-    console.log("[share] ffmpeg stderr", stderr.slice(0, 2000));
   }
   const stat = await fs.stat(outputPath);
   if (!stat.size || stat.size < 50_000) {
@@ -347,7 +335,6 @@ const generateVideoNoteClip = async (
     maxBuffer: 10 * 1024 * 1024,
   });
   if (stderr) {
-    console.log("[share] ffmpeg note stderr", stderr.slice(0, 2000));
   }
   const stat = await fs.stat(outputPath);
   if (!stat.size || stat.size < 50_000) {
@@ -392,11 +379,6 @@ const sendTelegramVideoFile = async (
   const data = (await response.json().catch(() => null)) as
     | { ok?: boolean; description?: string }
     | null;
-  console.log("[share] telegramApi response sendVideo(file)", {
-    status: response.status,
-    ok: data?.ok,
-    description: data?.description,
-  });
   if (!response.ok || !data?.ok) {
     const description =
       typeof data?.description === "string"
@@ -436,11 +418,6 @@ const sendTelegramVideoNoteFile = async (
   const data = (await response.json().catch(() => null)) as
     | { ok?: boolean; description?: string }
     | null;
-  console.log("[share] telegramApi response sendVideoNote(file)", {
-    status: response.status,
-    ok: data?.ok,
-    description: data?.description,
-  });
   if (!response.ok || !data?.ok) {
     const description =
       typeof data?.description === "string"
@@ -455,18 +432,6 @@ export const sendWordShare = async (req: Request, res: Response) => {
     const body = req.body as Partial<ShareRequestBody>;
     const initData = typeof body.initData === "string" ? body.initData : "";
     const word = typeof body.word === "string" ? body.word.trim() : "";
-    console.log("[share] sendWordShare request", {
-      hasInitData: Boolean(initData),
-      word,
-      translation: body.translation,
-      extraTranslationsCount: Array.isArray(body.extraTranslations)
-        ? body.extraTranslations.length
-        : 0,
-      synonymsCount: Array.isArray(body.synonyms) ? body.synonyms.length : 0,
-      videoUrl: body.videoUrl,
-      startSeconds: body.startSeconds,
-      endSeconds: body.endSeconds,
-    });
     if (!initData || !word) {
       res.status(400).json({ message: "Missing initData or word" });
       return;
@@ -537,11 +502,6 @@ export const sendWordShare = async (req: Request, res: Response) => {
         if (typeof first?.endSeconds === "number") {
           endSeconds = first.endSeconds;
         }
-        console.log("[share] fetched snippet for timings", {
-          videoUrl,
-          startSeconds,
-          endSeconds,
-        });
       } catch (timingError: any) {
         console.error("[share] failed to fetch snippet timings", {
           message: timingError?.message,
@@ -563,13 +523,6 @@ export const sendWordShare = async (req: Request, res: Response) => {
       body.examplesTotal,
     );
     const webAppUrl = buildWebAppUrl(word);
-    console.log("[share] prepared payload", {
-      chatId: telegram.id,
-      captionLength: caption.length,
-      webAppUrl,
-      useWebAppButton: TELEGRAM_USE_WEB_APP_BUTTON,
-      shortName: TELEGRAM_WEBAPP_SHORT_NAME,
-    });
 
     const replyMarkup = TELEGRAM_USE_WEB_APP_BUTTON
       ? {
@@ -615,11 +568,6 @@ export const sendWordShare = async (req: Request, res: Response) => {
 
     if (videoUrl && isHlsUrl(videoUrl) && startSeconds !== undefined) {
       try {
-        console.log("[share] generating clip via ffmpeg", {
-          videoUrl,
-          startSeconds,
-          endSeconds,
-        });
         const buffer = await generateMp4Clip(
           videoUrl,
           startSeconds,
@@ -636,7 +584,7 @@ export const sendWordShare = async (req: Request, res: Response) => {
     }
 
     if (videoUrl) {
-      console.log("[share] skip sendVideo: unsupported video url", { videoUrl });
+      // unsupported video url, fallback to text
     }
     {
       await telegramApi("sendMessage", {
@@ -665,14 +613,6 @@ export const sendPhraseShare = async (req: Request, res: Response) => {
     const body = req.body as Partial<SharePhraseRequestBody>;
     const initData = typeof body.initData === "string" ? body.initData : "";
     const phrase = typeof body.phrase === "string" ? body.phrase.trim() : "";
-    console.log("[share] sendPhraseShare request", {
-      hasInitData: Boolean(initData),
-      phrase,
-      translation: body.translation,
-      videoUrl: body.videoUrl,
-      startSeconds: body.startSeconds,
-      endSeconds: body.endSeconds,
-    });
     if (!initData || !phrase) {
       res.status(400).json({ message: "Missing initData or phrase" });
       return;
@@ -726,11 +666,6 @@ export const sendPhraseShare = async (req: Request, res: Response) => {
         if (typeof first?.endSeconds === "number") {
           endSeconds = first.endSeconds;
         }
-        console.log("[share] fetched snippet for timings", {
-          videoUrl,
-          startSeconds,
-          endSeconds,
-        });
       } catch (timingError: any) {
         console.error("[share] failed to fetch snippet timings", {
           message: timingError?.message,
@@ -754,13 +689,6 @@ export const sendPhraseShare = async (req: Request, res: Response) => {
       body.examplesTotal,
     );
     const webAppUrl = buildWebAppUrl(phrase);
-    console.log("[share] prepared payload", {
-      chatId: telegram.id,
-      captionLength: caption.length,
-      webAppUrl,
-      useWebAppButton: TELEGRAM_USE_WEB_APP_BUTTON,
-      shortName: TELEGRAM_WEBAPP_SHORT_NAME,
-    });
 
     const replyMarkup = TELEGRAM_USE_WEB_APP_BUTTON
       ? {
@@ -806,11 +734,6 @@ export const sendPhraseShare = async (req: Request, res: Response) => {
 
     if (videoUrl && isHlsUrl(videoUrl) && startSeconds !== undefined) {
       try {
-        console.log("[share] generating clip via ffmpeg", {
-          videoUrl,
-          startSeconds,
-          endSeconds,
-        });
         const buffer = await generateMp4Clip(
           videoUrl,
           startSeconds,
@@ -827,7 +750,7 @@ export const sendPhraseShare = async (req: Request, res: Response) => {
     }
 
     if (videoUrl) {
-      console.log("[share] skip sendVideo: unsupported video url", { videoUrl });
+      // unsupported video url, fallback to text
     }
     {
       await telegramApi("sendMessage", {

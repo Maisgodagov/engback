@@ -15,6 +15,7 @@
     "backfill:transcripts": "ts-node scripts/backfillTranscriptTokens.ts",
     "word-progress:recalc": "ts-node scripts/recalculateWordProgress.ts",
     "snippets:generate": "ts-node scripts/generateGameSnippets.ts",
+    "video:feed-buckets": "ts-node scripts/video/generateFeedBuckets.ts",
     "reading:epub": "ts-node scripts/reading/epub-to-json.ts",
     "reading:import": "ts-node scripts/reading/import-book.ts",
     "reading:upload": "ts-node scripts/reading/upload-book.ts"
