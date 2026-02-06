@@ -7,10 +7,11 @@ import { UserRole } from '../../shared/types';
 
 import type { LoginInput, RegisterInput, TelegramLoginInput } from './auth.schemas';
 import { prisma } from '../../shared/prisma/prismaClient';
+import { signAccessToken, signRefreshToken } from '../../shared/auth/jwt';
 
 const createTokens = (user: UserProfileDto): AuthTokens => ({
-  accessToken: `access-${user.id}`,
-  refreshToken: `refresh-${user.id}`,
+  accessToken: signAccessToken({ sub: user.id, role: user.role, email: user.email }),
+  refreshToken: signRefreshToken({ sub: user.id, role: user.role, email: user.email }),
 });
 
 export const parseTelegramInitData = (initData: string) => {

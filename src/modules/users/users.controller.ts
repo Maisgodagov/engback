@@ -12,6 +12,7 @@ export const list = async (req: Request, res: Response) => {
 };
 
 const getUserId = (req: Request): string | null => {
+  if (req.user?.id) return req.user.id;
   const header = req.header('x-user-id');
   if (header && header.trim()) return header.trim();
   if (typeof req.query.userId === 'string' && req.query.userId.trim()) return req.query.userId.trim();

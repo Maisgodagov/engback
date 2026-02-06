@@ -10,6 +10,7 @@ import {
 import { dictionaryService } from './dictionary.service';
 
 const getUserId = (req: Request): string | null => {
+  if (req.user?.id) return req.user.id;
   const header = req.header('x-user-id');
   if (header && header.trim()) {
     return header.trim();

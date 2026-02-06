@@ -3,12 +3,11 @@ import express from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';
 
+import { authMiddleware, requireAuth } from '../shared/middleware/auth';
 import { errorHandler } from '../shared/middleware/errorHandler';
 import { authRouter } from '../modules/auth/auth.router';
-import { coursesRouter } from '../modules/courses/courses.router';
 import { usersRouter } from '../modules/users/users.router';
 import { dictionaryRouter } from '../modules/dictionary/dictionary.router';
-import { preferencesRouter } from '../modules/preferences/preferences.router';
 import { adminRouter } from '../modules/admin/admin.router';
 import { videoLearningRouter } from '../modules/video-learning/videoLearning.router';
 import { exercisesRouter } from '../modules/exercises/exercises.router';
@@ -55,6 +54,7 @@ export const createApp = () => {
   // Ensure preflight succeeds for any route
   app.options('*', cors());
   app.use(express.json());
+  app.use(authMiddleware);
   app.use(morgan('dev'));
 
   app.get('/health', (_req, res) => {
@@ -62,10 +62,9 @@ export const createApp = () => {
   });
 
   app.use('/api/auth', authRouter);
+  app.use('/api', requireAuth);
   app.use('/api/users', usersRouter);
-  app.use('/api/courses', coursesRouter);
   app.use('/api/dictionary', dictionaryRouter);
-  app.use('/api/preferences', preferencesRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/video-learning', videoLearningRouter);
   app.use('/api/exercises', exercisesRouter);
