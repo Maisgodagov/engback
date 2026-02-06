@@ -768,8 +768,7 @@ const parseFeedCursor = (cursor?: string | null): FeedCursor => {
 
 const formatFeedCursor = (cursor: FeedCursor): string | null => {
   if (!cursor) return null;
-  const rounded = Math.round(cursor.score * 1000000) / 1000000;
-  return `${rounded}:${cursor.id}`;
+  return `${cursor.score}:${cursor.id}`;
 };
 
 const buildBucketKey = (params: {
@@ -939,13 +938,19 @@ const loadBucketItems = async (
   cursor: FeedCursor,
   take: number
 ) => {
+  const scoreEpsilon = 0.000001;
+  const scoreLower = cursor ? cursor.score - scoreEpsilon : 0;
+  const scoreUpper = cursor ? cursor.score + scoreEpsilon : 0;
   const where: Prisma.VideoFeedBucketItemWhereInput = {
     bucketKey,
     ...(cursor
       ? {
           OR: [
-            { score: { lt: cursor.score } },
-            { score: cursor.score, contentId: { lt: cursor.id } },
+            { score: { lt: scoreLower } },
+            {
+              score: { gte: scoreLower, lte: scoreUpper },
+              contentId: { lt: cursor.id },
+            },
           ],
         }
       : {}),
