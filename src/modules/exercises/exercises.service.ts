@@ -100,7 +100,7 @@ const fetchProgress = async (userId: string, wordId: number): Promise<Progress> 
   const [row] = await prisma.$queryRaw<DbProgressRow[]>(Prisma.sql`
     SELECT word_id, status, touches_total, touches_correct, streak, added_to_vocab
     FROM user_word_progress
-    WHERE user_id = ${userId} AND word_id = ${wordId}
+    WHERE userId = ${userId} AND word_id = ${wordId}
     LIMIT 1
   `);
 
@@ -143,7 +143,7 @@ export const exercisesService = {
     const progressRows = await prisma.$queryRaw<DbProgressRow[]>(Prisma.sql`
       SELECT word_id, status, touches_total, touches_correct, streak, added_to_vocab
       FROM user_word_progress
-      WHERE user_id = ${userId} AND word_id IN (${Prisma.join(limitedWordIds)})
+      WHERE userId = ${userId} AND word_id IN (${Prisma.join(limitedWordIds)})
     `);
 
     const excludedIds = new Set(
@@ -177,7 +177,7 @@ export const exercisesService = {
       ? await prisma.$queryRaw<{ word: string }[]>(Prisma.sql`
           SELECT word
           FROM user_words
-          WHERE user_id = ${userId}
+          WHERE userId = ${userId}
             AND LOWER(word) IN (${Prisma.join(candidateWordsLower)})
         `)
       : [];
@@ -327,7 +327,7 @@ export const exercisesService = {
     const isCorrectInt = isCorrect ? 1 : 0;
 
     await prisma.$executeRaw(Prisma.sql`
-      INSERT INTO user_word_progress (user_id, word_id, status, touches_total, touches_correct, streak, added_to_vocab)
+      INSERT INTO user_word_progress (userId, word_id, status, touches_total, touches_correct, streak, added_to_vocab)
       VALUES (
         ${userId},
         ${wordId},
@@ -354,7 +354,7 @@ export const exercisesService = {
 
   async markKnown(userId: string, wordId: number): Promise<Progress> {
     await prisma.$executeRaw(Prisma.sql`
-      INSERT INTO user_word_progress (user_id, word_id, status, touches_total, touches_correct, streak, added_to_vocab)
+      INSERT INTO user_word_progress (userId, word_id, status, touches_total, touches_correct, streak, added_to_vocab)
       VALUES (${userId}, ${wordId}, 'known', 1, 1, 1, 0)
       ON DUPLICATE KEY UPDATE
         status = 'known',
@@ -394,7 +394,7 @@ export const exercisesService = {
     }
 
     await prisma.$executeRaw(Prisma.sql`
-      INSERT INTO user_word_progress (user_id, word_id, status, touches_total, touches_correct, streak, added_to_vocab)
+      INSERT INTO user_word_progress (userId, word_id, status, touches_total, touches_correct, streak, added_to_vocab)
       VALUES (${userId}, ${wordId}, 'learning', 0, 0, 0, 1)
       ON DUPLICATE KEY UPDATE added_to_vocab = 1;
     `);
@@ -402,3 +402,4 @@ export const exercisesService = {
     return fetchProgress(userId, wordId);
   },
 };
+
