@@ -750,9 +750,10 @@ type ModerationFilter = "all" | "moderated" | "unmoderated";
 type FeedCursor = { score: number; id: number } | null;
 
 const FEED_BUCKET_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
-const FEED_BUCKET_MAX_ITEMS = 5000;
+const FEED_BUCKET_MAX_ITEMS = 20000;
 const FEED_BATCH_MULTIPLIER = 5;
-const FEED_MAX_FETCH_LOOPS = 6;
+const FEED_MAX_FETCH_LOOPS = 12;
+const FEED_MAX_SCAN_ITEMS = 800;
 
 const parseFeedCursor = (cursor?: string | null): FeedCursor => {
   if (!cursor) return null;
@@ -1353,6 +1354,11 @@ const getFeed = async (
     bucketScore: number;
   }> = [];
   let hasMore = false;
+  let scanned = 0;
+  const maxScan = Math.max(
+    FEED_MAX_SCAN_ITEMS,
+    normalizedLimit * FEED_BATCH_MULTIPLIER * FEED_MAX_FETCH_LOOPS
+  );
 
   for (let loop = 0; loop < FEED_MAX_FETCH_LOOPS; loop += 1) {
     const bucketItems = await loadBucketItems(bucketKey, cursorState, batchSize);
@@ -1360,6 +1366,7 @@ const getFeed = async (
       hasMore = false;
       break;
     }
+    scanned += bucketItems.length;
 
     const contentIds = bucketItems.map((item) => item.contentId);
     const records = await prisma.videoLearningContent.findMany({
@@ -1371,6 +1378,7 @@ const getFeed = async (
     bucketItems.forEach((item) => {
       const record = recordMap.get(item.contentId);
       if (!record) return;
+      if (likedSet.has(record.id)) return;
       if (seenSet.has(record.id)) return;
       if (statusMap.get(record.id) === VideoLearningStatus.WATCHED) return;
       collected.push({ record, bucketScore: item.score });
@@ -1381,6 +1389,7 @@ const getFeed = async (
     hasMore = bucketItems.length >= batchSize;
 
     if (collected.length >= normalizedLimit) break;
+    if (scanned >= maxScan) break;
   }
 
   if (!collected.length) {
