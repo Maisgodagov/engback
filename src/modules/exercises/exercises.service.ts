@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 
 import { prisma } from '../../shared/prisma/prismaClient';
+import { muellerService } from '../mueller/mueller.service';
 
 type DbWordRow = {
   wordId: number;
@@ -171,11 +172,16 @@ export const exercisesService = {
       return [];
     }
 
-    const vocabRows = await prisma.$queryRaw<{ word_id: number }[]>(Prisma.sql`
-      SELECT word_id FROM user_vocab
-      WHERE user_id = ${userId} AND word_id IN (${Prisma.join(candidateIds)})
-    `);
-    const vocabSet = new Set(vocabRows.map((row) => Number(row.word_id)));
+    const candidateWordsLower = uniqStrings(wordRows.map((row) => row.word.toLowerCase()));
+    const vocabRows = candidateWordsLower.length
+      ? await prisma.$queryRaw<{ word: string }[]>(Prisma.sql`
+          SELECT word
+          FROM user_words
+          WHERE user_id = ${userId}
+            AND LOWER(word) IN (${Prisma.join(candidateWordsLower)})
+        `)
+      : [];
+    const vocabSet = new Set(vocabRows.map((row) => row.word.toLowerCase()));
 
     const progressByWord = new Map<number, Progress>();
     progressRows.forEach((row) => {
@@ -184,7 +190,7 @@ export const exercisesService = {
         touchesTotal: Number(row.touches_total ?? 0),
         touchesCorrect: Number(row.touches_correct ?? 0),
         streak: Number(row.streak ?? 0),
-        addedToVocab: Boolean(row.added_to_vocab) || vocabSet.has(Number(row.word_id)),
+        addedToVocab: Boolean(row.added_to_vocab),
       };
       progressByWord.set(Number(row.word_id), progress);
     });
@@ -232,13 +238,20 @@ export const exercisesService = {
       if (!translations.length) continue;
 
       const correctRu = translations[0];
-      const progress = progressByWord.get(row.wordId) ?? {
-        status: 'new',
-        touchesTotal: 0,
-        touchesCorrect: 0,
-        streak: 0,
-        addedToVocab: vocabSet.has(row.wordId),
-      };
+      const progressBase = progressByWord.get(row.wordId);
+      const progress: Progress = progressBase
+        ? {
+            ...progressBase,
+            addedToVocab:
+              progressBase.addedToVocab || vocabSet.has(row.word.toLowerCase()),
+          }
+        : {
+            status: 'new',
+            touchesTotal: 0,
+            touchesCorrect: 0,
+            streak: 0,
+            addedToVocab: vocabSet.has(row.word.toLowerCase()),
+          };
 
       // Randomize direction generation:
       // 75% chance: only one direction (randomly chosen)
@@ -268,7 +281,10 @@ export const exercisesService = {
             correctAnswer: correctRu,
             options: enRuOptions,
             translations: [correctRu],
-            progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
+            progress: {
+              ...progress,
+              addedToVocab: progress.addedToVocab || vocabSet.has(row.word.toLowerCase()),
+            },
           });
         }
       }
@@ -294,7 +310,10 @@ export const exercisesService = {
             correctAnswer: row.word,
             options: ruEnOptions,
             translations: [correctRu],
-            progress: { ...progress, addedToVocab: progress.addedToVocab || vocabSet.has(row.wordId) },
+            progress: {
+              ...progress,
+              addedToVocab: progress.addedToVocab || vocabSet.has(row.word.toLowerCase()),
+            },
           });
         }
       }
@@ -348,11 +367,31 @@ export const exercisesService = {
   },
 
   async addToVocab(userId: string, wordId: number, note?: string): Promise<Progress> {
-    await prisma.$executeRaw(Prisma.sql`
-      INSERT INTO user_vocab (user_id, word_id, note)
-      VALUES (${userId}, ${wordId}, ${note ?? null})
-      ON DUPLICATE KEY UPDATE note = VALUES(note);
-    `);
+    const entry = await muellerService.getById(wordId);
+    if (!entry) {
+      throw Object.assign(new Error('Word not found'), { status: 404 });
+    }
+
+    const primaryTranslation = entry.translations[0] ?? '';
+    const existing = await prisma.userWord.findFirst({
+      where: {
+        userId,
+        word: entry.word,
+        translation: primaryTranslation,
+      },
+    });
+    if (!existing) {
+      await prisma.userWord.create({
+        data: {
+          userId,
+          word: entry.word,
+          translation: primaryTranslation,
+          partOfSpeech: entry.partOfSpeech,
+          sourceLang: 'en',
+          targetLang: 'ru',
+        },
+      });
+    }
 
     await prisma.$executeRaw(Prisma.sql`
       INSERT INTO user_word_progress (user_id, word_id, status, touches_total, touches_correct, streak, added_to_vocab)

@@ -182,11 +182,11 @@ export const dictionaryService = {
     const rows = await prisma.$queryRaw<
       Array<{ id: string; type: "word" | "phrase"; createdAt: Date }>
     >(Prisma.sql`
-      SELECT id, 'word' AS type, created_at AS createdAt
+      SELECT id, 'word' AS type, createdAt AS createdAt
       FROM user_words
       WHERE user_id = ${userId}
       UNION ALL
-      SELECT id, 'phrase' AS type, created_at AS createdAt
+      SELECT id, 'phrase' AS type, createdAt AS createdAt
       FROM user_phrases
       WHERE user_id = ${userId}
       ORDER BY createdAt DESC
