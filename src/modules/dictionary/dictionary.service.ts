@@ -184,11 +184,11 @@ export const dictionaryService = {
     >(Prisma.sql`
       SELECT id, 'word' AS type, createdAt AS createdAt
       FROM user_words
-      WHERE user_id = ${userId}
+      WHERE userId = ${userId}
       UNION ALL
       SELECT id, 'phrase' AS type, createdAt AS createdAt
       FROM user_phrases
-      WHERE user_id = ${userId}
+      WHERE userId = ${userId}
       ORDER BY createdAt DESC
       LIMIT ${take} OFFSET ${skip}
     `);
