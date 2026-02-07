@@ -30,6 +30,14 @@ const getUserId = (req: Request): string | null => {
 };
 
 export const getFeed = async (req: Request, res: Response) => {
+  // Prevent 304 responses for dynamic feed data
+  // Some clients treat 304 as empty response and show no items
+  delete (req.headers as Record<string, string | undefined>)["if-none-match"];
+  delete (req.headers as Record<string, string | undefined>)["if-modified-since"];
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+
   const userId = getUserId(req);
   if (!userId) {
     res.status(401).json({ message: 'Missing user identifier' });
