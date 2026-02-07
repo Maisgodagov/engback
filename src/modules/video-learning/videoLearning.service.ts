@@ -1448,7 +1448,8 @@ const getFeed = async (
   });
 
   scored.sort((a, b) => b.score - a.score);
-  const selected = scored.slice(0, normalizedLimit);
+  const diversified = diversifyFeedByAuthor(scored, 2);
+  const selected = diversified.slice(0, normalizedLimit);
 
   const items: VideoFeedItem[] = selected.map(({ record }) => {
     const analysis: AnalysisResult = {
@@ -1960,6 +1961,50 @@ const diversifyCandidateIdsByAuthor = async (
   return result;
 };
 
+const diversifyFeedByAuthor = (
+  items: Array<{ record: PoolRecord; score: number }>,
+  maxPerAuthor = 6
+): Array<{ record: PoolRecord; score: number }> => {
+  if (items.length <= 1) return items;
+
+  const buckets = new Map<string, Array<{ record: PoolRecord; score: number }>>();
+  const authorOrder: string[] = [];
+
+  items.forEach((item) => {
+    const authorKey = normalizeSnippetAuthorKey(item.record.author);
+    if (!buckets.has(authorKey)) {
+      buckets.set(authorKey, []);
+      authorOrder.push(authorKey);
+    }
+    buckets.get(authorKey)!.push(item);
+  });
+
+  authorOrder.forEach((key) => {
+    const bucket = buckets.get(key);
+    if (!bucket) return;
+    bucket.sort((a, b) => b.score - a.score);
+  });
+
+  const result: Array<{ record: PoolRecord; score: number }> = [];
+  const authorCounts = new Map<string, number>();
+
+  while (result.length < items.length) {
+    let addedThisRound = false;
+    for (const authorKey of authorOrder) {
+      const bucket = buckets.get(authorKey);
+      if (!bucket || bucket.length === 0) continue;
+      const count = authorCounts.get(authorKey) ?? 0;
+      if (count >= maxPerAuthor) continue;
+      result.push(bucket.shift()!);
+      authorCounts.set(authorKey, count + 1);
+      addedThisRound = true;
+      if (result.length >= items.length) break;
+    }
+    if (!addedThisRound) break;
+  }
+
+  return result.length ? result : items;
+};
 const fetchRandomContentIds = async (limit: number): Promise<number[]> => {
   const safeLimit = Math.max(1, Math.min(limit, 20000));
   const rows = await prisma.$queryRaw<Array<{ id: number }>>`
@@ -3322,3 +3367,5 @@ export const videoLearningService = {
   getAuthors,
   updateAuthor,
 };
+
+
