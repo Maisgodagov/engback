@@ -1449,7 +1449,8 @@ const getFeed = async (
 
   scored.sort((a, b) => b.score - a.score);
   const diversified = diversifyFeedByAuthor(scored, 2);
-  const selected = diversified.slice(0, normalizedLimit);
+  const recentAuthors = getRecentFeedAuthors(userId);
+  const selected = selectFeedItemsWithAuthorDiversity(diversified, normalizedLimit, 2, recentAuthors);
 
   const items: VideoFeedItem[] = selected.map(({ record }) => {
     const analysis: AnalysisResult = {
@@ -1480,6 +1481,8 @@ const getFeed = async (
       author: record.author ?? null,
     };
   });
+
+  setRecentFeedAuthors(userId, items.map((item) => normalizeSnippetAuthorKey(item.author)));
 
   return {
     items,
@@ -2004,6 +2007,55 @@ const diversifyFeedByAuthor = (
   }
 
   return result.length ? result : items;
+};
+const selectFeedItemsWithAuthorDiversity = (
+  items: Array<{ record: PoolRecord; score: number }>,
+  limit: number,
+  maxPerAuthor: number,
+  recentAuthors: Set<string>
+): Array<{ record: PoolRecord; score: number }> => {
+  if (items.length === 0) return [];
+  const result: Array<{ record: PoolRecord; score: number }> = [];
+  const counts = new Map<string, number>();
+
+  const tryAdd = (item: { record: PoolRecord; score: number }) => {
+    const authorKey = normalizeSnippetAuthorKey(item.record.author);
+    const count = counts.get(authorKey) ?? 0;
+    if (count >= maxPerAuthor) return false;
+    counts.set(authorKey, count + 1);
+    result.push(item);
+    return true;
+  };
+
+  // Pass 1: avoid recently shown authors if possible
+  for (const item of items) {
+    if (result.length >= limit) break;
+    const authorKey = normalizeSnippetAuthorKey(item.record.author);
+    if (recentAuthors.has(authorKey)) continue;
+    tryAdd(item);
+  }
+
+  // Pass 2: fill remaining slots
+  if (result.length < limit) {
+    for (const item of items) {
+      if (result.length >= limit) break;
+      if (result.includes(item)) continue;
+      tryAdd(item);
+    }
+  }
+
+  return result;
+};
+
+const getRecentFeedAuthors = (userId: string): Set<string> => {
+  const cacheKey = `feed_recent_authors:${userId}`;
+  const cached = lruCache.get(cacheKey) as string[] | undefined;
+  return new Set(cached ?? []);
+};
+
+const setRecentFeedAuthors = (userId: string, authors: string[]): void => {
+  const cacheKey = `feed_recent_authors:${userId}`;
+  lruCache.set(cacheKey, authors, { ttl: 1000 * 60 * 30 }); // 30 min
 };
 const fetchRandomContentIds = async (limit: number): Promise<number[]> => {
   const safeLimit = Math.max(1, Math.min(limit, 20000));
@@ -3367,5 +3419,10 @@ export const videoLearningService = {
   getAuthors,
   updateAuthor,
 };
+
+
+
+
+
 
 
