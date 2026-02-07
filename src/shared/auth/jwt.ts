@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import { env } from "../../config/env";
 import type { UserRole } from "../types";
 
-const ACCESS_TOKEN_TTL = "15m";
+const ACCESS_TOKEN_TTL = "12h";
 const REFRESH_TOKEN_TTL = "30d";
 
 export type JwtPayload = {
