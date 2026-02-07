@@ -1,13 +1,13 @@
 import { Prisma } from '@prisma/client';
 
 import { prisma } from '../../shared/prisma/prismaClient';
-import { muellerService } from '../mueller/mueller.service';
+import { buildYandexEntries, muellerService, type YandexDictResponse } from '../mueller/mueller.service';
 
 type DbWordRow = {
   wordId: number;
   word: string;
   partOfSpeech: string | null;
-  translations: string | null;
+  translations: string[];
 };
 
 type DbProgressRow = {
@@ -63,14 +63,6 @@ const shuffleArray = <T>(input: T[]): T[] => {
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
-};
-
-const parseTranslations = (value: string | null): string[] => {
-  if (!value) return [];
-  return value
-    .split('||')
-    .map((item) => item.trim())
-    .filter(Boolean);
 };
 
 const buildOptions = (correct: string, pool: string[], extras: string[] = []): string[] => {
@@ -158,15 +150,28 @@ export const exercisesService = {
       return [];
     }
 
-    const wordRows = await prisma.$queryRaw<DbWordRow[]>(Prisma.sql`
-      SELECT
-        m.id AS wordId,
-        m.word,
-        m.part_of_speech AS partOfSpeech,
-        m.translations
-      FROM mueller_dictionary m
-      WHERE m.id IN (${Prisma.join(candidateIds)})
-    `);
+    const cacheRows = await prisma.yandexDictionaryCache.findMany({
+      where: { id: { in: candidateIds }, lang: 'en' },
+      select: { id: true, query: true, lang: true, response: true },
+    });
+
+    const wordRows: DbWordRow[] = cacheRows
+      .map((row) => {
+        const entries = buildYandexEntries(
+          row.query,
+          row.lang === 'ru' ? 'ru' : 'en',
+          row.response as YandexDictResponse,
+        );
+        const primary = entries[0];
+        if (!primary || !primary.translations.length) return null;
+        return {
+          wordId: row.id,
+          word: primary.word ?? row.query,
+          partOfSpeech: primary.partOfSpeech ?? null,
+          translations: primary.translations,
+        } as DbWordRow;
+      })
+      .filter((value): value is DbWordRow => Boolean(value));
 
     if (!wordRows.length) {
       return [];
@@ -195,37 +200,11 @@ export const exercisesService = {
       progressByWord.set(Number(row.word_id), progress);
     });
 
-    // Use offset-based randomization instead of ORDER BY RAND() for better performance
-    const randomOffset1 = Math.floor(Math.random() * 1000);
-    const randomOffset2 = Math.floor(Math.random() * 1000);
-
-    const translationPoolRows = await prisma.$queryRaw<{ translations: string }[]>(Prisma.sql`
-      SELECT translations
-      FROM mueller_dictionary
-      WHERE id NOT IN (${Prisma.join(candidateIds)})
-      LIMIT 200 OFFSET ${randomOffset1}
-    `);
-
-    const wordPoolRows = await prisma.$queryRaw<{ word: string }[]>(Prisma.sql`
-      SELECT word
-      FROM mueller_dictionary
-      WHERE id NOT IN (${Prisma.join(candidateIds)})
-      LIMIT 200 OFFSET ${randomOffset2}
-    `);
-
-    const translationPool = uniqStrings([
-      ...translationPoolRows.flatMap((row) => parseTranslations(row.translations)),
-      ...wordRows.flatMap((row) => parseTranslations(row.translations)),
-    ]);
-
-    const wordPool = uniqStrings([
-      ...wordPoolRows.map((row) => row.word),
-      ...wordRows.map((row) => row.word),
-    ]);
+    const translationPool = uniqStrings(wordRows.flatMap((row) => row.translations));
 
     const maxExercises = Math.min(
       MAX_EXERCISE_LIMIT,
-      exerciseLimit && exerciseLimit > 0 ? exerciseLimit : candidateIds.length * 2,
+      exerciseLimit && exerciseLimit > 0 ? exerciseLimit : candidateIds.length,
     );
 
     const exerciseKeys = new Set<string>();
@@ -234,7 +213,7 @@ export const exercisesService = {
     for (const row of wordRows) {
       if (exercises.length >= maxExercises) break;
 
-      const translations = parseTranslations(row.translations);
+      const translations = row.translations;
       if (!translations.length) continue;
 
       const correctRu = translations[0];
@@ -253,69 +232,30 @@ export const exercisesService = {
             addedToVocab: vocabSet.has(row.word.toLowerCase()),
           };
 
-      // Randomize direction generation:
-      // 75% chance: only one direction (randomly chosen)
-      // 25% chance: both directions
-      const random = Math.random();
-      const generateBoth = random < 0.25; // 25% chance for both
-      const generateEnRu = generateBoth || random >= 0.625; // 25% both + 37.5% only en-ru = 62.5%
-      const generateRuEn = generateBoth || (random >= 0.25 && random < 0.625); // 25% both + 37.5% only ru-en = 62.5%
+      const enRuKey = `${row.wordId}-en-ru`;
+      if (!exerciseKeys.has(enRuKey)) {
+        exerciseKeys.add(enRuKey);
 
-      if (generateEnRu) {
-        const enRuKey = `${row.wordId}-en-ru`;
-        if (!exerciseKeys.has(enRuKey)) {
-          exerciseKeys.add(enRuKey);
+        const enRuOptions = buildOptions(
+          correctRu,
+          translationPool.filter((item) => item !== correctRu),
+          translations.slice(1),
+        );
 
-          const enRuOptions = buildOptions(
-            correctRu,
-            translationPool.filter((item) => item !== correctRu),
-            translations.slice(1),
-          );
-
-          exercises.push({
-            wordId: row.wordId,
-            word: row.word,
-            partOfSpeech: row.partOfSpeech,
-            direction: 'en-ru',
-            prompt: row.word,
-            correctAnswer: correctRu,
-            options: enRuOptions,
-            translations: [correctRu],
-            progress: {
-              ...progress,
-              addedToVocab: progress.addedToVocab || vocabSet.has(row.word.toLowerCase()),
-            },
-          });
-        }
-      }
-
-      if (exercises.length >= maxExercises) break;
-
-      if (generateRuEn) {
-        const ruEnKey = `${row.wordId}-ru-en`;
-        if (!exerciseKeys.has(ruEnKey)) {
-          exerciseKeys.add(ruEnKey);
-
-          const ruEnOptions = buildOptions(
-            row.word,
-            wordPool.filter((item) => item !== row.word),
-          );
-
-          exercises.push({
-            wordId: row.wordId,
-            word: row.word,
-            partOfSpeech: row.partOfSpeech,
-            direction: 'ru-en',
-            prompt: correctRu,
-            correctAnswer: row.word,
-            options: ruEnOptions,
-            translations: [correctRu],
-            progress: {
-              ...progress,
-              addedToVocab: progress.addedToVocab || vocabSet.has(row.word.toLowerCase()),
-            },
-          });
-        }
+        exercises.push({
+          wordId: row.wordId,
+          word: row.word,
+          partOfSpeech: row.partOfSpeech,
+          direction: 'en-ru',
+          prompt: row.word,
+          correctAnswer: correctRu,
+          options: enRuOptions,
+          translations: [correctRu],
+          progress: {
+            ...progress,
+            addedToVocab: progress.addedToVocab || vocabSet.has(row.word.toLowerCase()),
+          },
+        });
       }
     }
 
