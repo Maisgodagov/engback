@@ -1470,10 +1470,344 @@ const getFeed = async (
       isModerated: record.isModerated ?? false,
       author: record.author ?? null,
     };
-  });\nreturn {
+  });
+  return {
     items,
     nextCursor: formatFeedCursor(cursorState),
     hasMore,
+  };
+};
+
+const fetchRandomContentIds = async (limit: number): Promise<number[]> => {
+  const safeLimit = Math.max(1, Math.min(limit, 20000));
+  const rows = await prisma.$queryRaw<Array<{ id: number }>>`
+    SELECT id
+    FROM video_learning_content
+    ORDER BY RAND()
+    LIMIT ${safeLimit}
+  `;
+  return rows
+    .map((row) => row.id)
+    .filter((id) => Number.isInteger(id) && id > 0);
+};
+
+const enforceSnippetAuthorLimit = async (
+  snippets: PhraseSnippet[],
+  maxPerAuthor: number,
+  authorMapOverride?: Map<number, string | null>
+): Promise<PhraseSnippet[]> => {
+  if (snippets.length <= maxPerAuthor) return snippets;
+  const contentIds = Array.from(
+    new Set(
+      snippets
+        .map((snippet) => Number(snippet.contentId))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )
+  );
+  if (!contentIds.length) return snippets;
+  const authorMap =
+    authorMapOverride && authorMapOverride.size > 0
+      ? authorMapOverride
+      : new Map(
+          (
+            await prisma.$queryRaw<Array<{ id: number; author: string | null }>>`
+              SELECT id, author
+              FROM video_learning_content
+              WHERE id IN (${Prisma.join(contentIds)})
+            `
+          ).map((row) => [row.id, row.author])
+        );
+  const counts = new Map<string, number>();
+  const limited: PhraseSnippet[] = [];
+  for (const snippet of snippets) {
+    const contentId = Number(snippet.contentId);
+    const author = Number.isFinite(contentId)
+      ? authorMap.get(contentId) ?? null
+      : null;
+    const key = normalizeSnippetAuthorKey(author);
+    const current = counts.get(key) ?? 0;
+    if (current >= maxPerAuthor) {
+      continue;
+    }
+    counts.set(key, current + 1);
+    limited.push(snippet);
+  }
+  return limited;
+};
+
+const fetchTokenCandidates = async (
+  normalizedToken: string,
+  batchSize: number,
+  lastCandidate?: TokenCandidateRow | null,
+  allowedContentIds?: number[] | null,
+  randomize = false
+): Promise<TokenCandidateRow[]> => {
+  if (!normalizedToken) {
+    return [];
+  }
+  const cursorClause = randomize
+    ? Prisma.sql``
+    : lastCandidate
+    ? Prisma.sql`AND (content_id < ${lastCandidate.contentId} OR (content_id = ${lastCandidate.contentId} AND position > ${lastCandidate.position}))`
+    : Prisma.sql``;
+  const allowedClause =
+    allowedContentIds && allowedContentIds.length > 0
+      ? Prisma.sql`AND content_id IN (${Prisma.join(allowedContentIds)})`
+      : Prisma.sql``;
+  const orderClause = randomize
+    ? Prisma.sql`ORDER BY RAND()`
+    : Prisma.sql`ORDER BY content_id DESC, position ASC`;
+  return prisma.$queryRaw<TokenCandidateRow[]>`
+    SELECT content_id AS contentId, position
+    FROM video_transcript_tokens
+    WHERE token_normalized = ${normalizedToken}
+    ${cursorClause}
+    ${allowedClause}
+    ${orderClause}
+    LIMIT ${batchSize}
+  `;
+};
+
+const getTokenFrequencies = async (
+  tokens: string[],
+  allowedContentIds?: number[] | null
+): Promise<Map<string, number>> => {
+  if (!tokens.length) return new Map();
+  const allowedClause =
+    allowedContentIds && allowedContentIds.length > 0
+      ? Prisma.sql`AND content_id IN (${Prisma.join(allowedContentIds)})`
+      : Prisma.sql``;
+  const rows = await prisma.$queryRaw<Array<{ token: string; count: bigint }>>`
+    SELECT token_normalized AS token, COUNT(*) AS count
+    FROM video_transcript_tokens
+    WHERE token_normalized IN (${Prisma.join(tokens)})
+    ${allowedClause}
+    GROUP BY token_normalized
+  `;
+  const map = new Map<string, number>();
+  rows.forEach((row) => {
+    map.set(row.token, Number(row.count));
+  });
+  return map;
+};
+
+const selectAnchorToken = async (
+  normalizedTokens: string[],
+  allowedContentIds?: number[] | null
+): Promise<{ token: string; offset: number } | null> => {
+  if (!normalizedTokens.length) return null;
+  const uniqueTokens = Array.from(new Set(normalizedTokens));
+  const frequencies = await getTokenFrequencies(
+    uniqueTokens,
+    allowedContentIds
+  );
+  if (frequencies.size === 0) {
+    return null;
+  }
+  for (const token of uniqueTokens) {
+    if (!frequencies.has(token)) {
+      return null;
+    }
+  }
+  let bestToken = normalizedTokens[0];
+  let bestOffset = 0;
+  let bestFrequency = frequencies.get(bestToken) ?? Number.MAX_SAFE_INTEGER;
+  normalizedTokens.forEach((token, index) => {
+    const frequency = frequencies.get(token) ?? Number.MAX_SAFE_INTEGER;
+    if (frequency < bestFrequency) {
+      bestFrequency = frequency;
+      bestToken = token;
+      bestOffset = index;
+    }
+  });
+  if (
+    !Number.isFinite(bestFrequency) ||
+    bestFrequency === Number.MAX_SAFE_INTEGER
+  ) {
+    return null;
+  }
+  return {
+    token: bestToken,
+    offset: bestOffset,
+  };
+};
+
+const resolveCandidateMatch = async (
+  candidate: TokenCandidateRow,
+  normalizedTokens: string[],
+  anchorOffset: number
+): Promise<CandidateMatch | null> => {
+  const phraseLength = normalizedTokens.length;
+  if (!phraseLength) return null;
+
+  const targetStartPosition = candidate.position - anchorOffset;
+  if (targetStartPosition < 0) {
+    return null;
+  }
+
+  const windowStart = Math.max(0, targetStartPosition - TOKEN_CONTEXT_WINDOW);
+  const windowEnd =
+    targetStartPosition + phraseLength - 1 + TOKEN_CONTEXT_WINDOW;
+  const tokens = await fetchTokenSlice(
+    candidate.contentId,
+    windowStart,
+    windowEnd
+  );
+  if (!tokens.length) return null;
+
+  const tokensByPosition = new Map(
+    tokens.map((token) => [token.position, token])
+  );
+  for (let i = 0; i < phraseLength; i += 1) {
+    const position = targetStartPosition + i;
+    const token = tokensByPosition.get(position);
+    if (!token) {
+      return null;
+    }
+    const normalized = (token.tokenNormalized ?? "").trim();
+    if (!normalized || normalized !== normalizedTokens[i]) {
+      return null;
+    }
+  }
+
+  const matchStartPosition = targetStartPosition;
+  const matchEndPosition = targetStartPosition + phraseLength - 1;
+  const matchStartIndex = tokens.findIndex(
+    (token) => token.position === matchStartPosition
+  );
+  const matchEndIndex = tokens.findIndex(
+    (token) => token.position === matchEndPosition
+  );
+  if (matchStartIndex === -1 || matchEndIndex === -1) {
+    return null;
+  }
+
+  const windowChunks = tokenRowsToChunks(tokens);
+  const matchedChunks = windowChunks.slice(matchStartIndex, matchEndIndex + 1);
+  if (!matchedChunks.length) return null;
+
+  const rawStartSeconds = matchedChunks[0]?.timestamp[0] ?? 0;
+  const rawEndSeconds =
+    matchedChunks[matchedChunks.length - 1]?.timestamp[1] ?? rawStartSeconds;
+
+  return {
+    contentId: candidate.contentId,
+    matchStartPosition,
+    matchEndPosition,
+    windowChunks,
+    matchStartIndex,
+    matchEndIndex,
+    rawStartSeconds,
+    rawEndSeconds,
+  };
+};
+
+const loadSnippetContent = async (
+  contentId: number,
+  cache: Map<number, SnippetContentRecord>
+): Promise<SnippetContentRecord | null> => {
+  if (cache.has(contentId)) {
+    return cache.get(contentId) ?? null;
+  }
+  const record = await prisma.videoLearningContent.findUnique({
+    where: { id: contentId },
+    select: {
+      id: true,
+      videoName: true,
+      videoUrl: true,
+      durationSeconds: true,
+      audioLevel: true,
+      transcriptTranslationChunks: true,
+      author: true,
+    },
+  });
+  if (!record) {
+    return null;
+  }
+  cache.set(contentId, record);
+  return record;
+};
+
+const buildSnippetFromMatch = async (
+  match: CandidateMatch,
+  options: { phrase: string; snippetPadding: number },
+  cache: Map<number, SnippetContentRecord>
+): Promise<PhraseSnippet | null> => {
+  const metadata = await loadSnippetContent(match.contentId, cache);
+  if (!metadata || !metadata.videoUrl) {
+    return null;
+  }
+
+  const matchedChunks = match.windowChunks.slice(
+    match.matchStartIndex,
+    match.matchEndIndex + 1
+  );
+  const matchedText = formatChunksText(matchedChunks);
+  if (!matchedText) return null;
+  const contextText = buildContextText(
+    match.windowChunks,
+    match.matchStartIndex,
+    match.matchEndIndex,
+    CONTEXT_WINDOW
+  );
+
+  const paddedStart = Math.max(
+    0,
+    match.rawStartSeconds - options.snippetPadding
+  );
+  const rawEndWithPadding = match.rawEndSeconds + options.snippetPadding;
+  const duration =
+    typeof metadata.durationSeconds === "number" &&
+    Number.isFinite(metadata.durationSeconds)
+      ? metadata.durationSeconds
+      : null;
+  const clampedEnd =
+    duration !== null
+      ? Math.min(rawEndWithPadding, duration)
+      : rawEndWithPadding;
+  const minimumDelta =
+    options.snippetPadding > 0 ? options.snippetPadding : 0.5;
+  const safeEnd =
+    clampedEnd > paddedStart ? clampedEnd : paddedStart + minimumDelta;
+
+  const translationChunks = parseChunkArray(
+    metadata.transcriptTranslationChunks
+  );
+  const translationIndexes = translationChunks.length
+    ? findChunkIndexesInRange(
+        translationChunks,
+        match.rawStartSeconds,
+        match.rawEndSeconds
+      )
+    : [];
+  const translationMatchedText = translationIndexes.length
+    ? buildTextFromChunkIndexes(translationChunks, translationIndexes)
+    : "";
+  const translationContextIndexes = translationChunks.length
+    ? findChunkIndexesInRange(translationChunks, paddedStart, safeEnd)
+    : [];
+  const translationContextText = translationContextIndexes.length
+    ? buildTextFromChunkIndexes(translationChunks, translationContextIndexes)
+    : translationMatchedText;
+
+  return {
+    id: `${match.contentId}-${match.matchStartPosition}-${match.matchEndPosition}`,
+    contentId: match.contentId.toString(),
+    videoName: metadata.videoName,
+    videoUrl: metadata.videoUrl ?? "",
+    startSeconds: paddedStart,
+    endSeconds: safeEnd,
+    matchedText,
+    contextText,
+    phrase: options.phrase,
+    durationSeconds: duration,
+    audioLevel:
+      typeof metadata.audioLevel === "number" &&
+      Number.isFinite(metadata.audioLevel)
+        ? metadata.audioLevel
+        : undefined,
+    translationMatchedText: translationMatchedText || undefined,
+    translationContextText: translationContextText || undefined,
   };
 };
 
@@ -2979,6 +3313,10 @@ export const videoLearningService = {
   getAuthors,
   updateAuthor,
 };
+
+
+
+
 
 
 
