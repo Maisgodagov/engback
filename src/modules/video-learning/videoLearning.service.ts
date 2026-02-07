@@ -929,20 +929,12 @@ const ensureFeedBucket = async (
     take: FEED_BUCKET_MAX_ITEMS,
   });
 
-  const now = Date.now();
-  const items = records.map((record) => {
-    const likes = record.likesCount ?? 0;
-    const ageDays = record.processedAt
-      ? Math.max(0, (now - record.processedAt.getTime()) / 86400000)
-      : 0;
-    const recencyBoost = Math.max(0, 30 - ageDays) * 0.1;
-    const score = Math.log10(likes + 1) * 5 + recencyBoost;
-    return {
-      bucketKey,
-      contentId: record.id,
-      score,
-    };
-  });
+  const items = records.map((record) => ({
+    bucketKey,
+    contentId: record.id,
+    // Max randomization: ignore likes/recency so items are fully shuffled
+    score: Math.random(),
+  }));
 
   if (items.length) {
     await prisma.videoFeedBucketItem.createMany({ data: items });
