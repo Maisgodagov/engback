@@ -62,7 +62,23 @@ type ContentRecord = {
 };
 
 type PoolRecord = Prisma.VideoLearningContentGetPayload<{
-  include: { videoTopics: { select: { topic: true } } };
+  select: {
+    id: true;
+    videoName: true;
+    videoUrl: true;
+    durationSeconds: true;
+    audioLevel: true;
+    processedAt: true;
+    likesCount: true;
+    isAdultContent: true;
+    isModerated: true;
+    author: true;
+    cefrLevel: true;
+    speechSpeed: true;
+    grammarComplexity: true;
+    vocabularyComplexity: true;
+    videoTopics: { select: { topic: true } };
+  };
 }>;
 
 export const parseChunkArray = (value: unknown): TranscriptWordChunk[] => {
@@ -1376,7 +1392,23 @@ const getFeed = async (
     const contentIds = bucketItems.map((item) => item.contentId);
     const records = await prisma.videoLearningContent.findMany({
       where: { id: { in: contentIds } },
-      include: { videoTopics: { select: { topic: true } } },
+      select: {
+        id: true,
+        videoName: true,
+        videoUrl: true,
+        durationSeconds: true,
+        audioLevel: true,
+        processedAt: true,
+        likesCount: true,
+        isAdultContent: true,
+        isModerated: true,
+        author: true,
+        cefrLevel: true,
+        speechSpeed: true,
+        grammarComplexity: true,
+        vocabularyComplexity: true,
+        videoTopics: { select: { topic: true } },
+      },
     });
     const recordMap = new Map(records.map((record) => [record.id, record]));
 
@@ -1419,29 +1451,32 @@ const getFeed = async (
   const selected = scored.slice(0, normalizedLimit);
 
   const items: VideoFeedItem[] = selected.map(({ record }) => {
-    const { videoTopics: _topics, ...rest } = record;
-    const processed = mapContentRecord(
-      rest as ContentRecord,
-      likedSet.has(record.id),
-      {
-        isAdultContent: record.isAdultContent ?? false,
-        isModerated: record.isModerated ?? false,
-      }
-    );
+    const analysis: AnalysisResult = {
+      cefrLevel: (record.cefrLevel as AnalysisResult["cefrLevel"]) ?? "A1",
+      speechSpeed:
+        (record.speechSpeed as AnalysisResult["speechSpeed"]) ?? "normal",
+      grammarComplexity:
+        (record.grammarComplexity as AnalysisResult["grammarComplexity"]) ??
+        "simple",
+      vocabularyComplexity:
+        (record.vocabularyComplexity as AnalysisResult["vocabularyComplexity"]) ??
+        "basic",
+      topics: [],
+    };
     return {
-      id: processed.id,
-      videoName: processed.videoName,
-      videoUrl: processed.videoUrl,
-      durationSeconds: processed.durationSeconds,
-      audioLevel: processed.audioLevel,
-      analysis: processed.analysis,
+      id: record.id.toString(),
+      videoName: record.videoName,
+      videoUrl: typeof record.videoUrl === "string" ? record.videoUrl : "",
+      durationSeconds: record.durationSeconds,
+      audioLevel: record.audioLevel ?? undefined,
+      analysis,
       status: statusMap.get(record.id) ?? VideoLearningStatus.NOT_STARTED,
-      likesCount: processed.likesCount,
-      isLiked: processed.isLiked,
-      createdAt: processed.createdAt,
-      isAdultContent: processed.isAdultContent,
-      isModerated: processed.isModerated,
-      author: processed.author ?? null,
+      likesCount: record.likesCount ?? 0,
+      isLiked: likedSet.has(record.id),
+      createdAt: (record.processedAt ?? new Date()).toISOString(),
+      isAdultContent: record.isAdultContent ?? false,
+      isModerated: record.isModerated ?? false,
+      author: record.author ?? null,
     };
   });
 
