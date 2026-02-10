@@ -3,9 +3,6 @@ import jwt from "jsonwebtoken";
 import { env } from "../../config/env";
 import type { UserRole } from "../types";
 
-const ACCESS_TOKEN_TTL = "12h";
-const REFRESH_TOKEN_TTL = "30d";
-
 export type JwtPayload = {
   sub: string;
   role: UserRole;
@@ -16,14 +13,14 @@ export const signAccessToken = (payload: JwtPayload) => {
   if (!env.jwtSecret) {
     throw Object.assign(new Error("Missing JWT_SECRET"), { status: 500 });
   }
-  return jwt.sign(payload, env.jwtSecret, { expiresIn: ACCESS_TOKEN_TTL });
+  return jwt.sign(payload, env.jwtSecret);
 };
 
 export const signRefreshToken = (payload: JwtPayload) => {
   if (!env.jwtSecret) {
     throw Object.assign(new Error("Missing JWT_SECRET"), { status: 500 });
   }
-  return jwt.sign(payload, env.jwtSecret, { expiresIn: REFRESH_TOKEN_TTL });
+  return jwt.sign(payload, env.jwtSecret);
 };
 
 export const verifyToken = (token: string): JwtPayload => {
