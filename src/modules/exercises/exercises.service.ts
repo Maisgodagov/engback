@@ -139,20 +139,14 @@ export const exercisesService = {
 
     const uniqueIds = Array.from(new Set(wordIds.map((id) => Number(id)).filter(Number.isInteger)));
 
-    const effectiveWordLimit = Math.min(
-      MAX_WORD_LIMIT,
-      wordLimit && wordLimit > 0 ? wordLimit : uniqueIds.length,
-    );
-    const limitedWordIds = uniqueIds.slice(0, effectiveWordLimit);
-
-    if (!limitedWordIds.length) {
+    if (!uniqueIds.length) {
       return [];
     }
 
     const progressRows = await prisma.$queryRaw<DbProgressRow[]>(Prisma.sql`
       SELECT word_id, status, touches_total, touches_correct, streak, added_to_vocab
       FROM user_word_progress
-      WHERE user_id = ${userId} AND word_id IN (${Prisma.join(limitedWordIds)})
+      WHERE user_id = ${userId} AND word_id IN (${Prisma.join(uniqueIds)})
     `);
 
     const excludedIds = new Set(
@@ -161,7 +155,7 @@ export const exercisesService = {
         .map((row) => Number(row.word_id)),
     );
 
-    const candidateIds = limitedWordIds.filter((id) => !excludedIds.has(id));
+    const candidateIds = uniqueIds.filter((id) => !excludedIds.has(id));
     if (!candidateIds.length) {
       return [];
     }
@@ -172,7 +166,17 @@ export const exercisesService = {
       WHERE word_id IN (${Prisma.join(candidateIds)})
     `);
     const globalExcludedIds = new Set(globallyExcludedRows.map((row) => Number(row.word_id)));
-    const finalCandidateIds = candidateIds.filter((id) => !globalExcludedIds.has(id));
+    const filteredCandidateIds = candidateIds.filter((id) => !globalExcludedIds.has(id));
+
+    if (!filteredCandidateIds.length) {
+      return [];
+    }
+
+    const effectiveWordLimit = Math.min(
+      MAX_WORD_LIMIT,
+      wordLimit && wordLimit > 0 ? wordLimit : filteredCandidateIds.length,
+    );
+    const finalCandidateIds = filteredCandidateIds.slice(0, effectiveWordLimit);
 
     if (!finalCandidateIds.length) {
       return [];
