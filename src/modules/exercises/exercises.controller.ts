@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 
 import {
   addToVocabSchema,
+  excludeWordSchema,
   getExercisesSchema,
   markKnownSchema,
   submitAnswerSchema,
@@ -126,5 +127,24 @@ export const addToVocab = async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Failed to add to vocab', error);
     res.status(500).json({ message: 'Failed to add to vocab' });
+  }
+};
+
+export const excludeWord = async (req: Request, res: Response) => {
+  const parseResult = excludeWordSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    res.status(400).json({ message: 'Invalid request', issues: parseResult.error.issues });
+    return;
+  }
+
+  const { wordId } = parseResult.data;
+  const adminUserId = req.user?.id ?? null;
+
+  try {
+    const result = await exercisesService.excludeWord(wordId, adminUserId);
+    res.json(result);
+  } catch (error) {
+    console.error('Failed to exclude word', error);
+    res.status(500).json({ message: 'Failed to exclude word' });
   }
 };

@@ -25,3 +25,8 @@ export const addToVocabSchema = z.object({
   note: z.string().trim().max(255).optional(),
 });
 export type AddToVocabInput = z.infer<typeof addToVocabSchema>;
+
+export const excludeWordSchema = z.object({
+  wordId: z.number().int().positive(),
+});
+export type ExcludeWordInput = z.infer<typeof excludeWordSchema>;

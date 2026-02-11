@@ -44,6 +44,22 @@ type Exercise = {
 const MAX_WORD_LIMIT = 100;
 const MAX_EXERCISE_LIMIT = 80;
 const TOUCH_GOAL = 5;
+let excludedWordsTableChecked = false;
+
+const ensureExcludedWordsTable = async () => {
+  if (excludedWordsTableChecked) return;
+  await prisma.$executeRawUnsafe(
+    `CREATE TABLE IF NOT EXISTS exercise_excluded_words (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      word_id INT NOT NULL,
+      created_by_user_id VARCHAR(191) NULL,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      UNIQUE KEY uniq_exercise_excluded_word_id (word_id),
+      INDEX idx_exercise_excluded_created_by (created_by_user_id)
+    )`,
+  );
+  excludedWordsTableChecked = true;
+};
 
 const uniqStrings = (values: string[]): string[] => {
   const set = new Set<string>();
@@ -119,6 +135,7 @@ export const exercisesService = {
     wordLimit?: number,
     exerciseLimit?: number,
   ): Promise<Exercise[]> {
+    await ensureExcludedWordsTable();
 
     const uniqueIds = Array.from(new Set(wordIds.map((id) => Number(id)).filter(Number.isInteger)));
 
@@ -145,13 +162,24 @@ export const exercisesService = {
     );
 
     const candidateIds = limitedWordIds.filter((id) => !excludedIds.has(id));
-
     if (!candidateIds.length) {
       return [];
     }
 
+    const globallyExcludedRows = await prisma.$queryRaw<Array<{ word_id: number }>>(Prisma.sql`
+      SELECT word_id
+      FROM exercise_excluded_words
+      WHERE word_id IN (${Prisma.join(candidateIds)})
+    `);
+    const globalExcludedIds = new Set(globallyExcludedRows.map((row) => Number(row.word_id)));
+    const finalCandidateIds = candidateIds.filter((id) => !globalExcludedIds.has(id));
+
+    if (!finalCandidateIds.length) {
+      return [];
+    }
+
     const cacheRows = await prisma.yandexDictionaryCache.findMany({
-      where: { id: { in: candidateIds }, lang: 'en' },
+      where: { id: { in: finalCandidateIds }, lang: 'en' },
       select: { id: true, query: true, lang: true, response: true },
     });
 
@@ -204,7 +232,7 @@ export const exercisesService = {
 
     const maxExercises = Math.min(
       MAX_EXERCISE_LIMIT,
-      exerciseLimit && exerciseLimit > 0 ? exerciseLimit : candidateIds.length,
+      exerciseLimit && exerciseLimit > 0 ? exerciseLimit : finalCandidateIds.length,
     );
 
     const exerciseKeys = new Set<string>();
@@ -340,6 +368,19 @@ export const exercisesService = {
     `);
 
     return fetchProgress(userId, wordId);
+  },
+
+  async excludeWord(wordId: number, createdByUserId?: string | null) {
+    await ensureExcludedWordsTable();
+    await prisma.$executeRaw(
+      Prisma.sql`
+        INSERT INTO exercise_excluded_words (word_id, created_by_user_id)
+        VALUES (${wordId}, ${createdByUserId ?? null})
+        ON DUPLICATE KEY UPDATE
+          created_by_user_id = VALUES(created_by_user_id)
+      `,
+    );
+    return { wordId, excluded: true as const };
   },
 };
 
