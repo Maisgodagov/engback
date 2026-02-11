@@ -104,6 +104,14 @@ const buildOptions = (correct: string, pool: string[], extras: string[] = []): s
   return shuffleArray(options);
 };
 
+const normalizeOptionText = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^\p{L}\p{N}\s-]+/gu, "")
+    .replace(/\s+/g, " ");
+
 const fetchProgress = async (userId: string, wordId: number): Promise<Progress> => {
   const [row] = await prisma.$queryRaw<DbProgressRow[]>(Prisma.sql`
     SELECT word_id, status, touches_total, touches_correct, streak, added_to_vocab
@@ -267,11 +275,17 @@ export const exercisesService = {
       const enRuKey = `${row.wordId}-en-ru`;
       if (!exerciseKeys.has(enRuKey)) {
         exerciseKeys.add(enRuKey);
+        const currentWordTranslationSet = new Set(
+          translations.map((value) => normalizeOptionText(value)),
+        );
 
         const enRuOptions = buildOptions(
           correctRu,
-          translationPool.filter((item) => item !== correctRu),
-          translations.slice(1),
+          translationPool.filter(
+            (item) =>
+              item !== correctRu &&
+              !currentWordTranslationSet.has(normalizeOptionText(item)),
+          ),
         );
 
         exercises.push({
