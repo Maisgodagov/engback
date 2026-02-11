@@ -97,10 +97,6 @@ const buildOptions = (correct: string, pool: string[], extras: string[] = []): s
     if (options.length >= 3) break;
   }
 
-  while (options.length < 3) {
-    options.push(correct);
-  }
-
   return shuffleArray(options);
 };
 
@@ -287,6 +283,9 @@ export const exercisesService = {
               !currentWordTranslationSet.has(normalizeOptionText(item)),
           ),
         );
+        if (enRuOptions.length < 2) {
+          continue;
+        }
 
         exercises.push({
           wordId: row.wordId,
