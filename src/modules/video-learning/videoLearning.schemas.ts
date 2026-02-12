@@ -63,7 +63,7 @@ export const phraseSearchQuerySchema = z.object({
       const numeric = typeof value === 'string' ? Number(value) : value;
       return Number.isFinite(numeric) ? Math.trunc(numeric) : undefined;
     })
-    .pipe(z.number().int().min(100).max(5000))
+    .pipe(z.number().int().min(100).max(15000))
     .optional(),
 });
 
