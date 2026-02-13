@@ -3,6 +3,10 @@ import type { Request, Response } from 'express';
 import { videoLearningService } from './videoLearning.service';
 import {
   contentIdParamSchema,
+  createTagSchema,
+  tagIdParamSchema,
+  updateVideoTagsSchema,
+  assignAuthorTagSchema,
   submitProgressSchema,
   phraseSearchQuerySchema,
   updateLikeSchema,
@@ -251,5 +255,35 @@ export const updateAuthor = async (req: Request, res: Response) => {
   const params = contentIdParamSchema.parse({ id: req.params.id });
   const body = updateAuthorSchema.parse(req.body);
   const result = await videoLearningService.updateAuthor(params.id, body.author);
+  res.json(result);
+};
+
+export const getTagSummary = async (_req: Request, res: Response) => {
+  const result = await videoLearningService.getTagSummary();
+  res.json(result);
+};
+
+export const createTag = async (req: Request, res: Response) => {
+  const body = createTagSchema.parse(req.body);
+  const result = await videoLearningService.createTag(body.name);
+  res.status(201).json(result);
+};
+
+export const deleteTag = async (req: Request, res: Response) => {
+  const params = tagIdParamSchema.parse({ tagId: req.params.tagId });
+  await videoLearningService.deleteTag(params.tagId);
+  res.status(204).send();
+};
+
+export const updateVideoTags = async (req: Request, res: Response) => {
+  const params = contentIdParamSchema.parse({ id: req.params.id });
+  const body = updateVideoTagsSchema.parse(req.body);
+  const result = await videoLearningService.updateVideoTags(params.id, body.tagIds);
+  res.json(result);
+};
+
+export const assignTagToAuthorVideos = async (req: Request, res: Response) => {
+  const body = assignAuthorTagSchema.parse(req.body);
+  const result = await videoLearningService.assignTagToAuthorVideos(body.author, body.tagId);
   res.json(result);
 };

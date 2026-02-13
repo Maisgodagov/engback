@@ -288,6 +288,37 @@ const normalizeTopicsForStorage = (
   return Array.from(unique.values()).slice(0, 20);
 };
 
+const ensureVideoTagsCatalogTable = async (): Promise<void> => {
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS video_tags (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(100) NOT NULL UNIQUE,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+};
+
+const syncCatalogWithExistingTopics = async (): Promise<void> => {
+  await ensureVideoTagsCatalogTable();
+  await prisma.$executeRawUnsafe(`
+    INSERT IGNORE INTO video_tags (name)
+    SELECT DISTINCT topic
+    FROM video_topics
+    WHERE topic IS NOT NULL AND TRIM(topic) <> ''
+  `);
+};
+
+const upsertTagCatalogByNames = async (tags: string[]): Promise<void> => {
+  const normalized = normalizeTopicsForStorage(tags);
+  if (!normalized.length) return;
+  await ensureVideoTagsCatalogTable();
+  const values = normalized.map((tag) => Prisma.sql`(${tag})`);
+  await prisma.$executeRaw`
+    INSERT IGNORE INTO video_tags (name)
+    VALUES ${Prisma.join(values)}
+  `;
+};
+
 const normalizeExercisesForStorage = (
   input: UpdateExercisesInput["exercises"]
 ): Prisma.JsonArray => {
@@ -2979,6 +3010,190 @@ const updateTopics = async (
   return getContentOrThrow(String(numericId));
 };
 
+const getTagSummary = async (): Promise<{
+  totalVideos: number;
+  videosWithTags: number;
+  videosWithoutTags: number;
+  tags: Array<{ id: number; name: string; usageCount: number }>;
+}> => {
+  await syncCatalogWithExistingTopics();
+
+  const [totalsRow] = await prisma.$queryRaw<
+    Array<{ totalVideos: bigint | number; videosWithTags: bigint | number }>
+  >`
+    SELECT
+      (SELECT COUNT(*) FROM video_learning_content) AS totalVideos,
+      (SELECT COUNT(DISTINCT video_id) FROM video_topics) AS videosWithTags
+  `;
+
+  const tags = await prisma.$queryRaw<
+    Array<{ id: number; name: string; usageCount: bigint | number }>
+  >`
+    SELECT vt.id, vt.name, COALESCE(stats.usage_count, 0) AS usageCount
+    FROM video_tags vt
+    LEFT JOIN (
+      SELECT topic, COUNT(DISTINCT video_id) AS usage_count
+      FROM video_topics
+      GROUP BY topic
+    ) stats ON stats.topic = vt.name
+    ORDER BY vt.name ASC
+  `;
+
+  const totalVideos = Number(totalsRow?.totalVideos ?? 0);
+  const videosWithTags = Number(totalsRow?.videosWithTags ?? 0);
+  return {
+    totalVideos,
+    videosWithTags,
+    videosWithoutTags: Math.max(0, totalVideos - videosWithTags),
+    tags: tags.map((item) => ({
+      id: item.id,
+      name: item.name,
+      usageCount: Number(item.usageCount ?? 0),
+    })),
+  };
+};
+
+const createTag = async (
+  name: string
+): Promise<{ id: number; name: string; usageCount: number }> => {
+  const normalized = normalizeTopicsForStorage([name])[0];
+  if (!normalized) {
+    throw Object.assign(new Error("Tag name is required"), { status: 400 });
+  }
+  await ensureVideoTagsCatalogTable();
+  await prisma.$executeRaw`
+    INSERT IGNORE INTO video_tags (name)
+    VALUES (${normalized})
+  `;
+  const [tag] = await prisma.$queryRaw<
+    Array<{ id: number; name: string }>
+  >`
+    SELECT id, name
+    FROM video_tags
+    WHERE name = ${normalized}
+    LIMIT 1
+  `;
+  if (!tag) {
+    throw Object.assign(new Error("Failed to create tag"), { status: 500 });
+  }
+  return {
+    id: tag.id,
+    name: tag.name,
+    usageCount: 0,
+  };
+};
+
+const deleteTag = async (tagId: number): Promise<void> => {
+  await ensureVideoTagsCatalogTable();
+  const [tag] = await prisma.$queryRaw<
+    Array<{ id: number; name: string }>
+  >`
+    SELECT id, name
+    FROM video_tags
+    WHERE id = ${tagId}
+    LIMIT 1
+  `;
+  if (!tag) {
+    throw Object.assign(new Error("Tag not found"), { status: 404 });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const rows = await tx.videoLearningContent.findMany({
+      select: { id: true, topics: true },
+    });
+
+    for (const row of rows) {
+      const nextTopics = mapTopics(row.topics).filter((item) => item !== tag.name);
+      await tx.videoLearningContent.update({
+        where: { id: row.id },
+        data: { topics: nextTopics },
+      });
+    }
+
+    await tx.videoTopic.deleteMany({ where: { topic: tag.name } });
+    await tx.$executeRaw`DELETE FROM video_tags WHERE id = ${tagId}`;
+  });
+};
+
+const updateVideoTags = async (
+  contentId: string,
+  tagIds: number[]
+): Promise<ProcessedVideo> => {
+  const numericId = ensureContentNumericId(contentId);
+  await syncCatalogWithExistingTopics();
+  const uniqueTagIds = Array.from(new Set(tagIds)).slice(0, 20);
+  if (!uniqueTagIds.length) {
+    return updateTopics(String(numericId), { topics: [] });
+  }
+
+  const tags = await prisma.$queryRaw<Array<{ id: number; name: string }>>`
+    SELECT id, name
+    FROM video_tags
+    WHERE id IN (${Prisma.join(uniqueTagIds)})
+    ORDER BY name ASC
+  `;
+  const selectedTopics = normalizeTopicsForStorage(tags.map((tag) => tag.name));
+  return updateTopics(String(numericId), { topics: selectedTopics });
+};
+
+const assignTagToAuthorVideos = async (
+  author: string,
+  tagId: number
+): Promise<{ updatedVideos: number; tag: string; author: string }> => {
+  const sanitizedAuthor = author.trim();
+  if (!sanitizedAuthor) {
+    throw Object.assign(new Error("Author is required"), { status: 400 });
+  }
+  await syncCatalogWithExistingTopics();
+  const [tag] = await prisma.$queryRaw<Array<{ id: number; name: string }>>`
+    SELECT id, name
+    FROM video_tags
+    WHERE id = ${tagId}
+    LIMIT 1
+  `;
+  if (!tag) {
+    throw Object.assign(new Error("Tag not found"), { status: 404 });
+  }
+
+  const videos = await prisma.videoLearningContent.findMany({
+    where: { author: sanitizedAuthor },
+    select: { id: true, topics: true },
+  });
+  if (!videos.length) {
+    return { updatedVideos: 0, tag: tag.name, author: sanitizedAuthor };
+  }
+
+  await upsertTagCatalogByNames([tag.name]);
+  const topicRows: Array<{ contentId: number; topic: string }> = [];
+  await prisma.$transaction(async (tx) => {
+    for (const video of videos) {
+      const mergedTopics = normalizeTopicsForStorage([
+        ...mapTopics(video.topics),
+        tag.name,
+      ]);
+      await tx.videoLearningContent.update({
+        where: { id: video.id },
+        data: { topics: mergedTopics },
+      });
+      if (mergedTopics.includes(tag.name)) {
+        topicRows.push({ contentId: video.id, topic: tag.name });
+      }
+    }
+
+    if (topicRows.length) {
+      await tx.videoTopic.createMany({
+        data: topicRows.map((row) => ({
+          contentId: row.contentId,
+          topic: row.topic,
+        })),
+        skipDuplicates: true,
+      });
+    }
+  });
+
+  return { updatedVideos: videos.length, tag: tag.name, author: sanitizedAuthor };
+};
+
 const updateTranscriptChunks = async (
   id: string,
   payload: UpdateTranscriptChunksInput
@@ -3312,6 +3527,11 @@ export const videoLearningService = {
   submitProgress,
   getAuthors,
   updateAuthor,
+  getTagSummary,
+  createTag,
+  deleteTag,
+  updateVideoTags,
+  assignTagToAuthorVideos,
 };
 
 

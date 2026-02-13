@@ -126,6 +126,29 @@ export const updateTopicsSchema = z.object({
   topics: z.array(topicSchema).max(20),
 });
 
+export const createTagSchema = z.object({
+  name: topicSchema,
+});
+
+export const tagIdParamSchema = z.object({
+  tagId: z
+    .union([z.string(), z.number()])
+    .transform((value) => {
+      const numeric = typeof value === 'string' ? Number(value) : value;
+      return Number.isFinite(numeric) ? Math.trunc(numeric) : undefined;
+    })
+    .pipe(z.number().int().positive()),
+});
+
+export const updateVideoTagsSchema = z.object({
+  tagIds: z.array(z.number().int().positive()).max(20),
+});
+
+export const assignAuthorTagSchema = z.object({
+  author: z.string().trim().min(1).max(255),
+  tagId: z.number().int().positive(),
+});
+
 export const updateTranscriptChunksSchema = z.object({
   chunks: z.array(transcriptChunkSchema).min(1),
 });
@@ -178,6 +201,10 @@ export type UpdateSpeechSpeedInput = z.infer<typeof updateSpeechSpeedSchema>;
 export type UpdateGrammarComplexityInput = z.infer<typeof updateGrammarComplexitySchema>;
 export type UpdateVocabularyComplexityInput = z.infer<typeof updateVocabularyComplexitySchema>;
 export type UpdateTopicsInput = z.infer<typeof updateTopicsSchema>;
+export type CreateTagInput = z.infer<typeof createTagSchema>;
+export type TagIdParamInput = z.infer<typeof tagIdParamSchema>;
+export type UpdateVideoTagsInput = z.infer<typeof updateVideoTagsSchema>;
+export type AssignAuthorTagInput = z.infer<typeof assignAuthorTagSchema>;
 export type UpdateTranscriptChunksInput = z.infer<typeof updateTranscriptChunksSchema>;
 export type UpdateTranslationChunksInput = z.infer<typeof updateTranslationChunksSchema>;
 export type UpdateSubtitleChunkInput = z.infer<typeof updateSubtitleChunkSchema>;
