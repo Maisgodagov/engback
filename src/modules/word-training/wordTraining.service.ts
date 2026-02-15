@@ -126,6 +126,14 @@ const SOURCE_LIMIT = 500;
 const MAX_RETRY_ATTEMPTS = 2;
 
 let tablesReady = false;
+let gameSnippetsAvailable: boolean | null = null;
+let transcriptTokensAvailable: boolean | null = null;
+
+const isMissingTableError = (error: unknown, tableName: string): boolean => {
+  const candidate = error as { code?: string; message?: string; meta?: { message?: string } };
+  const text = String(candidate?.meta?.message ?? candidate?.message ?? '').toLowerCase();
+  return candidate?.code === 'P2010' && text.includes('1146') && text.includes(tableName.toLowerCase());
+};
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
@@ -780,62 +788,102 @@ const getExamplesByWord = async (
   const normalizedWord = normalizeWord(word);
   if (!normalizedWord) return [];
 
-  const gameRows = await prisma.$queryRaw<
-    Array<{
-      contentId: number;
-      videoName: string;
-      videoUrl: string | null;
-      startSeconds: number | null;
-      endSeconds: number | null;
-      text: string;
-    }>
-  >(Prisma.sql`
-    SELECT
-      gs.content_id AS contentId,
-      vlc.video_name AS videoName,
-      vlc.video_url AS videoUrl,
-      gs.start_seconds AS startSeconds,
-      gs.end_seconds AS endSeconds,
-      gs.phrase AS text
-    FROM game_snippets gs
-    INNER JOIN video_learning_content vlc ON vlc.id = gs.content_id
-    WHERE LOWER(gs.phrase) LIKE ${`%${normalizedWord}%`}
-      ${excludeContentId ? Prisma.sql`AND gs.content_id <> ${excludeContentId}` : Prisma.empty}
-      AND gs.is_active = 1
-      AND gs.is_approved = 1
-    ORDER BY RAND()
-    LIMIT ${Math.max(1, limit)}
-  `);
+  let gameRows: Array<{
+    contentId: number;
+    videoName: string;
+    videoUrl: string | null;
+    startSeconds: number | null;
+    endSeconds: number | null;
+    text: string;
+  }> = [];
+
+  if (gameSnippetsAvailable !== false) {
+    try {
+      gameRows = await prisma.$queryRaw<
+        Array<{
+          contentId: number;
+          videoName: string;
+          videoUrl: string | null;
+          startSeconds: number | null;
+          endSeconds: number | null;
+          text: string;
+        }>
+      >(Prisma.sql`
+        SELECT
+          gs.content_id AS contentId,
+          vlc.video_name AS videoName,
+          vlc.video_url AS videoUrl,
+          gs.start_seconds AS startSeconds,
+          gs.end_seconds AS endSeconds,
+          gs.phrase AS text
+        FROM game_snippets gs
+        INNER JOIN video_learning_content vlc ON vlc.id = gs.content_id
+        WHERE LOWER(gs.phrase) LIKE ${`%${normalizedWord}%`}
+          ${excludeContentId ? Prisma.sql`AND gs.content_id <> ${excludeContentId}` : Prisma.empty}
+          AND gs.is_active = 1
+          AND gs.is_approved = 1
+        ORDER BY RAND()
+        LIMIT ${Math.max(1, limit)}
+      `);
+      gameSnippetsAvailable = true;
+    } catch (error) {
+      if (isMissingTableError(error, 'game_snippets')) {
+        gameSnippetsAvailable = false;
+      } else {
+        throw error;
+      }
+    }
+  }
 
   if (gameRows.length >= limit) {
     return gameRows.slice(0, limit);
   }
 
-  const tokenRows = await prisma.$queryRaw<
-    Array<{
-      contentId: number;
-      startSeconds: number | null;
-      endSeconds: number | null;
-      videoName: string;
-      videoUrl: string | null;
-      transcriptFull: string;
-    }>
-  >(Prisma.sql`
-    SELECT
-      t.content_id AS contentId,
-      MIN(t.start_seconds) AS startSeconds,
-      MAX(t.end_seconds) AS endSeconds,
-      vlc.video_name AS videoName,
-      vlc.video_url AS videoUrl,
-      vlc.transcript_full AS transcriptFull
-    FROM video_transcript_tokens t
-    INNER JOIN video_learning_content vlc ON vlc.id = t.content_id
-    WHERE t.token_normalized = ${normalizedWord}
-      ${excludeContentId ? Prisma.sql`AND t.content_id <> ${excludeContentId}` : Prisma.empty}
-    GROUP BY t.content_id, vlc.video_name, vlc.video_url, vlc.transcript_full
-    ORDER BY RAND()
-    LIMIT ${Math.max(1, limit * 2)}
-  `);
+  let tokenRows: Array<{
+    contentId: number;
+    startSeconds: number | null;
+    endSeconds: number | null;
+    videoName: string;
+    videoUrl: string | null;
+    transcriptFull: string;
+  }> = [];
+
+  if (transcriptTokensAvailable !== false) {
+    try {
+      tokenRows = await prisma.$queryRaw<
+        Array<{
+          contentId: number;
+          startSeconds: number | null;
+          endSeconds: number | null;
+          videoName: string;
+          videoUrl: string | null;
+          transcriptFull: string;
+        }>
+      >(Prisma.sql`
+        SELECT
+          t.content_id AS contentId,
+          MIN(t.start_seconds) AS startSeconds,
+          MAX(t.end_seconds) AS endSeconds,
+          vlc.video_name AS videoName,
+          vlc.video_url AS videoUrl,
+          vlc.transcript_full AS transcriptFull
+        FROM video_transcript_tokens t
+        INNER JOIN video_learning_content vlc ON vlc.id = t.content_id
+        WHERE t.token_normalized = ${normalizedWord}
+          ${excludeContentId ? Prisma.sql`AND t.content_id <> ${excludeContentId}` : Prisma.empty}
+        GROUP BY t.content_id, vlc.video_name, vlc.video_url, vlc.transcript_full
+        ORDER BY RAND()
+        LIMIT ${Math.max(1, limit * 2)}
+      `);
+      transcriptTokensAvailable = true;
+    } catch (error) {
+      if (isMissingTableError(error, 'video_transcript_tokens')) {
+        transcriptTokensAvailable = false;
+      } else {
+        throw error;
+      }
+    }
+  }
 
   const merged: WordExample[] = [...gameRows];
   const seen = new Set<number>(gameRows.map((row) => row.contentId));

@@ -18,99 +18,134 @@ const getUserId = (req: Request): string | null => {
   return null;
 };
 
-export const getOverview = async (req: Request, res: Response) => {
-  const userId = getUserId(req);
-  if (!userId) {
-    res.status(401).json({ message: 'Missing user identifier' });
-    return;
-  }
+const handleControllerError = (res: Response, error: unknown) => {
+  const status = (error as any)?.status ?? 500;
+  const message = (error as any)?.message ?? 'Internal Server Error';
+  const details = (error as any)?.details;
+  res.status(status).json({ message, details });
+};
 
-  const overview = await wordTrainingService.loadOverview(userId);
-  res.json(overview);
+export const getOverview = async (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) {
+      res.status(401).json({ message: 'Missing user identifier' });
+      return;
+    }
+
+    const overview = await wordTrainingService.loadOverview(userId);
+    res.json(overview);
+  } catch (error) {
+    handleControllerError(res, error);
+  }
 };
 
 export const startSession = async (req: Request, res: Response) => {
-  const userId = getUserId(req);
-  if (!userId) {
-    res.status(401).json({ message: 'Missing user identifier' });
-    return;
+  try {
+    const userId = getUserId(req);
+    if (!userId) {
+      res.status(401).json({ message: 'Missing user identifier' });
+      return;
+    }
+    const payload = startSessionSchema.parse(req.body ?? {});
+    const state = await wordTrainingService.startSession(userId, payload.targetWords);
+    res.status(201).json(state);
+  } catch (error) {
+    handleControllerError(res, error);
   }
-  const payload = startSessionSchema.parse(req.body ?? {});
-  const state = await wordTrainingService.startSession(userId, payload.targetWords);
-  res.status(201).json(state);
 };
 
 export const getCurrentTask = async (req: Request, res: Response) => {
-  const userId = getUserId(req);
-  if (!userId) {
-    res.status(401).json({ message: 'Missing user identifier' });
-    return;
-  }
-  const sessionId = String(req.params.sessionId ?? '').trim();
-  if (!sessionId) {
-    res.status(400).json({ message: 'Missing session id' });
-    return;
-  }
+  try {
+    const userId = getUserId(req);
+    if (!userId) {
+      res.status(401).json({ message: 'Missing user identifier' });
+      return;
+    }
+    const sessionId = String(req.params.sessionId ?? '').trim();
+    if (!sessionId) {
+      res.status(400).json({ message: 'Missing session id' });
+      return;
+    }
 
-  const state = await wordTrainingService.getCurrentTask(userId, sessionId);
-  res.json(state);
+    const state = await wordTrainingService.getCurrentTask(userId, sessionId);
+    res.json(state);
+  } catch (error) {
+    handleControllerError(res, error);
+  }
 };
 
 export const submitRecognition = async (req: Request, res: Response) => {
-  const userId = getUserId(req);
-  if (!userId) {
-    res.status(401).json({ message: 'Missing user identifier' });
-    return;
+  try {
+    const userId = getUserId(req);
+    if (!userId) {
+      res.status(401).json({ message: 'Missing user identifier' });
+      return;
+    }
+    const sessionId = String(req.params.sessionId ?? '').trim();
+    if (!sessionId) {
+      res.status(400).json({ message: 'Missing session id' });
+      return;
+    }
+    const payload = submitRecognitionSchema.parse(req.body ?? {});
+    const state = await wordTrainingService.submitRecognition(userId, sessionId, payload);
+    res.json(state);
+  } catch (error) {
+    handleControllerError(res, error);
   }
-  const sessionId = String(req.params.sessionId ?? '').trim();
-  if (!sessionId) {
-    res.status(400).json({ message: 'Missing session id' });
-    return;
-  }
-  const payload = submitRecognitionSchema.parse(req.body ?? {});
-  const state = await wordTrainingService.submitRecognition(userId, sessionId, payload);
-  res.json(state);
 };
 
 export const submitReinforcement = async (req: Request, res: Response) => {
-  const userId = getUserId(req);
-  if (!userId) {
-    res.status(401).json({ message: 'Missing user identifier' });
-    return;
+  try {
+    const userId = getUserId(req);
+    if (!userId) {
+      res.status(401).json({ message: 'Missing user identifier' });
+      return;
+    }
+    const sessionId = String(req.params.sessionId ?? '').trim();
+    if (!sessionId) {
+      res.status(400).json({ message: 'Missing session id' });
+      return;
+    }
+    const payload = submitReinforcementSchema.parse(req.body ?? {});
+    const state = await wordTrainingService.submitReinforcement(userId, sessionId, payload);
+    res.json(state);
+  } catch (error) {
+    handleControllerError(res, error);
   }
-  const sessionId = String(req.params.sessionId ?? '').trim();
-  if (!sessionId) {
-    res.status(400).json({ message: 'Missing session id' });
-    return;
-  }
-  const payload = submitReinforcementSchema.parse(req.body ?? {});
-  const state = await wordTrainingService.submitReinforcement(userId, sessionId, payload);
-  res.json(state);
 };
 
 export const finishSession = async (req: Request, res: Response) => {
-  const userId = getUserId(req);
-  if (!userId) {
-    res.status(401).json({ message: 'Missing user identifier' });
-    return;
+  try {
+    const userId = getUserId(req);
+    if (!userId) {
+      res.status(401).json({ message: 'Missing user identifier' });
+      return;
+    }
+    const sessionId = String(req.params.sessionId ?? '').trim();
+    if (!sessionId) {
+      res.status(400).json({ message: 'Missing session id' });
+      return;
+    }
+    const payload = finishSessionSchema.parse(req.body ?? {});
+    const state = await wordTrainingService.finishSession(userId, sessionId, payload.force);
+    res.json(state);
+  } catch (error) {
+    handleControllerError(res, error);
   }
-  const sessionId = String(req.params.sessionId ?? '').trim();
-  if (!sessionId) {
-    res.status(400).json({ message: 'Missing session id' });
-    return;
-  }
-  const payload = finishSessionSchema.parse(req.body ?? {});
-  const state = await wordTrainingService.finishSession(userId, sessionId, payload.force);
-  res.json(state);
 };
 
 export const getExamples = async (req: Request, res: Response) => {
-  const parseResult = getExamplesSchema.safeParse(req.query);
-  if (!parseResult.success) {
-    res.status(400).json({ message: 'Invalid request', issues: parseResult.error.issues });
-    return;
+  try {
+    const parseResult = getExamplesSchema.safeParse(req.query);
+    if (!parseResult.success) {
+      res.status(400).json({ message: 'Invalid request', issues: parseResult.error.issues });
+      return;
+    }
+    const { word, limit } = parseResult.data;
+    const items = await wordTrainingService.getExamplesByWord(word, limit ?? 3);
+    res.json({ items });
+  } catch (error) {
+    handleControllerError(res, error);
   }
-  const { word, limit } = parseResult.data;
-  const items = await wordTrainingService.getExamplesByWord(word, limit ?? 3);
-  res.json({ items });
 };
