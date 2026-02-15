@@ -840,7 +840,8 @@ const getQueuePosition = async (sessionId: string, itemId: number): Promise<{ po
 };
 
 const mapTask = async (sessionId: string, item: SessionItemRow) => {
-  const position = await getQueuePosition(sessionId, item.id);
+  const itemId = Number(item.id);
+  const position = await getQueuePosition(sessionId, itemId);
   let context = null as null | WordExample;
 
   if (item.context_content_id && item.context_text) {
@@ -871,7 +872,7 @@ const mapTask = async (sessionId: string, item: SessionItemRow) => {
   if (item.phase === 'recognition') {
     return {
       mode: 'recognition' as const,
-      itemId: item.id,
+      itemId,
       wordKey: item.word_key,
       word: item.word,
       translation: item.translation,
@@ -905,7 +906,7 @@ const mapTask = async (sessionId: string, item: SessionItemRow) => {
 
   return {
     mode: 'reinforcement' as const,
-    itemId: item.id,
+    itemId,
     wordKey: item.word_key,
     word: item.word,
     translation: item.translation,
