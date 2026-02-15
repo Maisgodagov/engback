@@ -1052,10 +1052,8 @@ const computeRecommendationScores = async (
     baseWhere.isAdultContent = false;
   }
 
-  // Non-admin users must always see only moderated videos.
-  const effectiveModerationFilter = isAdmin
-    ? moderationFilter ?? "all"
-    : "moderated";
+  const effectiveModerationFilter =
+    moderationFilter ?? (isAdmin ? "all" : "all");
   if (effectiveModerationFilter === "moderated") {
     baseWhere.isModerated = true;
   } else if (effectiveModerationFilter === "unmoderated") {
@@ -1331,9 +1329,8 @@ const getFeed = async (
   const parsedCursor = parseFeedCursor(cursor);
 
   const userRoleIsAdmin = isAdmin;
-  const effectiveModerationFilter = userRoleIsAdmin
-    ? moderationFilter ?? "all"
-    : "moderated";
+  const effectiveModerationFilter =
+    moderationFilter ?? (userRoleIsAdmin ? "all" : "all");
 
   const baseWhere: Prisma.VideoLearningContentWhereInput = {};
   if (cefrLevels) {
