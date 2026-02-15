@@ -3016,16 +3016,23 @@ const getTagSummary = async (): Promise<{
   totalVideos: number;
   videosWithTags: number;
   videosWithoutTags: number;
+  moderatedVideos: number;
+  unmoderatedVideos: number;
   tags: Array<{ id: number; name: string; usageCount: number }>;
 }> => {
   await syncCatalogWithExistingTopics();
 
   const [totalsRow] = await prisma.$queryRaw<
-    Array<{ totalVideos: bigint | number; videosWithTags: bigint | number }>
+    Array<{
+      totalVideos: bigint | number;
+      videosWithTags: bigint | number;
+      moderatedVideos: bigint | number;
+    }>
   >`
     SELECT
       (SELECT COUNT(*) FROM video_learning_content) AS totalVideos,
-      (SELECT COUNT(DISTINCT video_id) FROM video_topics) AS videosWithTags
+      (SELECT COUNT(DISTINCT video_id) FROM video_topics) AS videosWithTags,
+      (SELECT COUNT(*) FROM video_learning_content WHERE is_moderated = 1) AS moderatedVideos
   `;
 
   const tags = await prisma.$queryRaw<
@@ -3043,10 +3050,13 @@ const getTagSummary = async (): Promise<{
 
   const totalVideos = Number(totalsRow?.totalVideos ?? 0);
   const videosWithTags = Number(totalsRow?.videosWithTags ?? 0);
+  const moderatedVideos = Number(totalsRow?.moderatedVideos ?? 0);
   return {
     totalVideos,
     videosWithTags,
     videosWithoutTags: Math.max(0, totalVideos - videosWithTags),
+    moderatedVideos,
+    unmoderatedVideos: Math.max(0, totalVideos - moderatedVideos),
     tags: tags.map((item) => ({
       id: item.id,
       name: item.name,
