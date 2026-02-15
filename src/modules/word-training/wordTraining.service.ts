@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 
 import { prisma } from '../../shared/prisma/prismaClient';
 import { buildYandexEntries, type YandexDictResponse } from '../mueller/mueller.service';
+import { videoLearningService } from '../video-learning/videoLearning.service';
 
 type SourceType = 'manual' | 'viewed' | 'exercise';
 type QueueReason = 'review' | 'mistake' | 'new' | 'retry';
@@ -126,14 +127,6 @@ const SOURCE_LIMIT = 500;
 const MAX_RETRY_ATTEMPTS = 2;
 
 let tablesReady = false;
-let gameSnippetsAvailable: boolean | null = null;
-let transcriptTokensAvailable: boolean | null = null;
-
-const isMissingTableError = (error: unknown, tableName: string): boolean => {
-  const candidate = error as { code?: string; message?: string; meta?: { message?: string } };
-  const text = String(candidate?.meta?.message ?? candidate?.message ?? '').toLowerCase();
-  return candidate?.code === 'P2010' && text.includes('1146') && text.includes(tableName.toLowerCase());
-};
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
@@ -787,121 +780,29 @@ const getExamplesByWord = async (
 ): Promise<WordExample[]> => {
   const normalizedWord = normalizeWord(word);
   if (!normalizedWord) return [];
+  const result = await videoLearningService.searchPhrase(
+    normalizedWord,
+    Math.max(1, limit),
+    2,
+    undefined,
+    Math.max(10, limit * 4),
+    undefined,
+  );
 
-  let gameRows: Array<{
-    contentId: number;
-    videoName: string;
-    videoUrl: string | null;
-    startSeconds: number | null;
-    endSeconds: number | null;
-    text: string;
-  }> = [];
+  const mapped = result.items.map((item) => ({
+    contentId: Number(item.contentId),
+    videoName: item.videoName,
+    videoUrl: item.videoUrl ?? null,
+    startSeconds: Number.isFinite(item.startSeconds) ? item.startSeconds : null,
+    endSeconds: Number.isFinite(item.endSeconds) ? item.endSeconds : null,
+    text: item.contextText || item.matchedText || '',
+  }));
 
-  if (gameSnippetsAvailable !== false) {
-    try {
-      gameRows = await prisma.$queryRaw<
-        Array<{
-          contentId: number;
-          videoName: string;
-          videoUrl: string | null;
-          startSeconds: number | null;
-          endSeconds: number | null;
-          text: string;
-        }>
-      >(Prisma.sql`
-        SELECT
-          gs.content_id AS contentId,
-          vlc.video_name AS videoName,
-          vlc.video_url AS videoUrl,
-          gs.start_seconds AS startSeconds,
-          gs.end_seconds AS endSeconds,
-          gs.phrase AS text
-        FROM game_snippets gs
-        INNER JOIN video_learning_content vlc ON vlc.id = gs.content_id
-        WHERE LOWER(gs.phrase) LIKE ${`%${normalizedWord}%`}
-          ${excludeContentId ? Prisma.sql`AND gs.content_id <> ${excludeContentId}` : Prisma.empty}
-          AND gs.is_active = 1
-          AND gs.is_approved = 1
-        ORDER BY RAND()
-        LIMIT ${Math.max(1, limit)}
-      `);
-      gameSnippetsAvailable = true;
-    } catch (error) {
-      if (isMissingTableError(error, 'game_snippets')) {
-        gameSnippetsAvailable = false;
-      } else {
-        throw error;
-      }
-    }
+  if (!excludeContentId) {
+    return mapped.slice(0, limit);
   }
 
-  if (gameRows.length >= limit) {
-    return gameRows.slice(0, limit);
-  }
-
-  let tokenRows: Array<{
-    contentId: number;
-    startSeconds: number | null;
-    endSeconds: number | null;
-    videoName: string;
-    videoUrl: string | null;
-    transcriptFull: string;
-  }> = [];
-
-  if (transcriptTokensAvailable !== false) {
-    try {
-      tokenRows = await prisma.$queryRaw<
-        Array<{
-          contentId: number;
-          startSeconds: number | null;
-          endSeconds: number | null;
-          videoName: string;
-          videoUrl: string | null;
-          transcriptFull: string;
-        }>
-      >(Prisma.sql`
-        SELECT
-          t.content_id AS contentId,
-          MIN(t.start_seconds) AS startSeconds,
-          MAX(t.end_seconds) AS endSeconds,
-          vlc.video_name AS videoName,
-          vlc.video_url AS videoUrl,
-          vlc.transcript_full AS transcriptFull
-        FROM video_transcript_tokens t
-        INNER JOIN video_learning_content vlc ON vlc.id = t.content_id
-        WHERE t.token_normalized = ${normalizedWord}
-          ${excludeContentId ? Prisma.sql`AND t.content_id <> ${excludeContentId}` : Prisma.empty}
-        GROUP BY t.content_id, vlc.video_name, vlc.video_url, vlc.transcript_full
-        ORDER BY RAND()
-        LIMIT ${Math.max(1, limit * 2)}
-      `);
-      transcriptTokensAvailable = true;
-    } catch (error) {
-      if (isMissingTableError(error, 'video_transcript_tokens')) {
-        transcriptTokensAvailable = false;
-      } else {
-        throw error;
-      }
-    }
-  }
-
-  const merged: WordExample[] = [...gameRows];
-  const seen = new Set<number>(gameRows.map((row) => row.contentId));
-  for (const row of tokenRows) {
-    if (merged.length >= limit) break;
-    if (seen.has(row.contentId)) continue;
-    seen.add(row.contentId);
-    merged.push({
-      contentId: row.contentId,
-      videoName: row.videoName,
-      videoUrl: row.videoUrl,
-      startSeconds: row.startSeconds,
-      endSeconds: row.endSeconds,
-      text: row.transcriptFull.slice(0, 220),
-    });
-  }
-
-  return merged.slice(0, limit);
+  return mapped.filter((item) => item.contentId !== excludeContentId).slice(0, limit);
 };
 
 const getCurrentItem = async (sessionId: string): Promise<SessionItemRow | null> => {
