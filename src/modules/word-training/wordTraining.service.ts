@@ -140,6 +140,23 @@ const normalizeWord = (value: string): string =>
     .replace(/\s+/g, ' ')
     .trim();
 
+const normalizeOptionText = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]+/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const shuffleArray = <T>(items: T[]): T[] => {
+  const next = [...items];
+  for (let i = next.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [next[i], next[j]] = [next[j], next[i]];
+  }
+  return next;
+};
+
 const addMinutes = (base: Date, minutes: number): Date => new Date(base.getTime() + minutes * 60_000);
 const addDays = (base: Date, days: number): Date => new Date(base.getTime() + days * 86_400_000);
 
@@ -783,7 +800,7 @@ const getExamplesByWord = async (
   const result = await videoLearningService.searchPhrase(
     normalizedWord,
     Math.max(1, limit),
-    2,
+    0,
     undefined,
     Math.max(10, limit * 4),
     undefined,
@@ -839,7 +856,41 @@ const getQueuePosition = async (sessionId: string, itemId: number): Promise<{ po
   };
 };
 
-const mapTask = async (sessionId: string, item: SessionItemRow) => {
+const getRecognitionOptions = async (
+  userId: string,
+  wordKey: string,
+  correctTranslation: string,
+): Promise<string[]> => {
+  const correct = correctTranslation.trim();
+  if (!correct) return [];
+
+  const rows = await prisma.$queryRaw<Array<{ translation: string }>>(Prisma.sql`
+    SELECT translation
+    FROM word_training_progress
+    WHERE user_id = ${userId}
+      AND word_key <> ${wordKey}
+      AND translation IS NOT NULL
+      AND TRIM(translation) <> ''
+    ORDER BY RAND()
+    LIMIT 40
+  `);
+
+  const correctNorm = normalizeOptionText(correct);
+  const seen = new Set<string>([correctNorm]);
+  const distractors: string[] = [];
+  for (const row of rows) {
+    const candidate = row.translation.trim();
+    const norm = normalizeOptionText(candidate);
+    if (!candidate || !norm || seen.has(norm)) continue;
+    seen.add(norm);
+    distractors.push(candidate);
+    if (distractors.length >= 3) break;
+  }
+
+  return shuffleArray([correct, ...distractors]).slice(0, 4);
+};
+
+const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) => {
   const itemId = Number(item.id);
   const position = await getQueuePosition(sessionId, itemId);
   let context = null as null | WordExample;
@@ -870,6 +921,7 @@ const mapTask = async (sessionId: string, item: SessionItemRow) => {
   }
 
   if (item.phase === 'recognition') {
+    const recognitionOptions = await getRecognitionOptions(userId, item.word_key, item.translation);
     return {
       mode: 'recognition' as const,
       itemId,
@@ -882,6 +934,7 @@ const mapTask = async (sessionId: string, item: SessionItemRow) => {
       queuePosition: position.position,
       queueTotal: position.total,
       context,
+      recognitionOptions,
       showReinforcementAfter:
         item.initial_stage >= 2 ||
         item.initial_status === 'review' ||
@@ -979,7 +1032,7 @@ const buildSessionState = async (session: SessionRow) => {
       startedAt: fresh.started_at,
       completedAt: fresh.completed_at,
     },
-    task: item ? await mapTask(fresh.id, item) : null,
+    task: item ? await mapTask(fresh.user_id, fresh.id, item) : null,
   };
 };
 
