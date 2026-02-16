@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 
 import {
   getModerationSnippetsQuerySchema,
+  listGeneratedPhrasesQuerySchema,
   listModerationWordsQuerySchema,
   moderationWordParamSchema,
   saveModerationSelectionsSchema,
@@ -25,6 +26,16 @@ export const listModerationWords = async (req: Request, res: Response) => {
   try {
     const query = listModerationWordsQuerySchema.parse(req.query ?? {});
     const result = await wordTrainingService.listModerationWords(query);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const listGeneratedPhrases = async (req: Request, res: Response) => {
+  try {
+    const query = listGeneratedPhrasesQuerySchema.parse(req.query ?? {});
+    const result = await wordTrainingService.listGeneratedPhrases(query);
     res.json(result);
   } catch (error) {
     handleError(res, error);

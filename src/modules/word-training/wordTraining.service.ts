@@ -10,7 +10,7 @@ type QueueReason = 'review' | 'mistake' | 'new' | 'retry';
 type SessionStatus = 'active' | 'completed' | 'interrupted';
 type ProgressStatus = 'new' | 'learning' | 'review' | 'mastered';
 type RecognitionGrade = 'again' | 'hard' | 'good' | 'easy';
-type ExerciseType = 'fill-gap' | 'assemble';
+type ExerciseType = 'assemble';
 
 type SourceCandidate = {
   wordKey: string;
@@ -115,6 +115,12 @@ type WordExample = {
   startSeconds: number | null;
   endSeconds: number | null;
   text: string;
+};
+
+type GeneratedPhrase = {
+  phraseEn: string;
+  phraseRu: string | null;
+  phraseAudioUrl: string | null;
 };
 
 type SnippetModerationFilter = 'all' | 'moderated' | 'unmoderated';
@@ -263,10 +269,7 @@ const xpForGrade = (grade: RecognitionGrade): number => {
   return 4;
 };
 
-const pickReinforcementType = (word: string): ExerciseType => {
-  if (word.length > 8) return 'fill-gap';
-  return Math.random() >= 0.5 ? 'fill-gap' : 'assemble';
-};
+const pickReinforcementType = (): ExerciseType => 'assemble';
 
 const ensureWordTrainingTables = async () => {
   if (tablesReady) return;
@@ -392,6 +395,23 @@ const ensureWordTrainingTables = async () => {
       UNIQUE KEY uniq_word_pref_snippet (yandex_cache_id, content_id, start_seconds, end_seconds),
       KEY idx_word_pref_snippet_word (yandex_cache_id, is_enabled, updated_at),
       KEY idx_word_pref_snippet_content (content_id)
+    )
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS word_training_generated_phrases (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      yandex_cache_id INT NOT NULL,
+      word VARCHAR(255) NOT NULL,
+      phrase_en VARCHAR(255) NOT NULL,
+      phrase_ru VARCHAR(255) NULL,
+      phrase_audio_url VARCHAR(1024) NULL,
+      source_model VARCHAR(128) NULL,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      UNIQUE KEY uniq_word_training_generated_phrase (yandex_cache_id, phrase_en),
+      KEY idx_word_training_generated_phrases_word (yandex_cache_id, updated_at),
+      KEY idx_word_training_generated_phrases_audio (phrase_audio_url(255))
     )
   `);
 
@@ -967,11 +987,56 @@ const getPronunciationAudioUrl = async (
   return fallback?.audioUrl?.trim() || null;
 };
 
+const getGeneratedPhraseForWord = async (
+  yandexCacheId: number | null,
+  word: string,
+): Promise<GeneratedPhrase | null> => {
+  if (yandexCacheId) {
+    const [row] = await prisma.$queryRaw<
+      Array<{ phraseEn: string; phraseRu: string | null; phraseAudioUrl: string | null }>
+    >(Prisma.sql`
+      SELECT phrase_en AS phraseEn, phrase_ru AS phraseRu, phrase_audio_url AS phraseAudioUrl
+      FROM word_training_generated_phrases
+      WHERE yandex_cache_id = ${yandexCacheId}
+      ORDER BY RAND()
+      LIMIT 1
+    `);
+    if (row?.phraseEn?.trim()) {
+      return {
+        phraseEn: row.phraseEn.trim(),
+        phraseRu: row.phraseRu?.trim() || null,
+        phraseAudioUrl: row.phraseAudioUrl?.trim() || null,
+      };
+    }
+  }
+
+  const normalizedWord = normalizeWord(word);
+  if (!normalizedWord) return null;
+
+  const [fallback] = await prisma.$queryRaw<
+    Array<{ phraseEn: string; phraseRu: string | null; phraseAudioUrl: string | null }>
+  >(Prisma.sql`
+    SELECT phrase_en AS phraseEn, phrase_ru AS phraseRu, phrase_audio_url AS phraseAudioUrl
+    FROM word_training_generated_phrases
+    WHERE LOWER(word) = ${normalizedWord}
+    ORDER BY RAND()
+    LIMIT 1
+  `);
+
+  if (!fallback?.phraseEn?.trim()) return null;
+  return {
+    phraseEn: fallback.phraseEn.trim(),
+    phraseRu: fallback.phraseRu?.trim() || null,
+    phraseAudioUrl: fallback.phraseAudioUrl?.trim() || null,
+  };
+};
+
 const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) => {
   const itemId = Number(item.id);
   const position = await getQueuePosition(sessionId, itemId);
   let context = null as null | WordExample;
-  const pronunciationAudioUrl = await getPronunciationAudioUrl(item.yandex_cache_id, item.word);
+  const wordPronunciationAudioUrl = await getPronunciationAudioUrl(item.yandex_cache_id, item.word);
+  const generatedPhrase = await getGeneratedPhraseForWord(item.yandex_cache_id, item.word);
 
   if (item.context_content_id && item.context_text) {
     const [contentRow] = await prisma.$queryRaw<
@@ -1021,7 +1086,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
       queuePosition: position.position,
       queueTotal: position.total,
       context,
-      pronunciationAudioUrl,
+      pronunciationAudioUrl: wordPronunciationAudioUrl,
       recognitionOptions,
       showReinforcementAfter:
         item.initial_stage >= 2 ||
@@ -1030,8 +1095,8 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     };
   }
 
-  const reinforcementType = item.reinforcement_type ?? pickReinforcementType(item.word);
-  if (!item.reinforcement_type) {
+  const reinforcementType = pickReinforcementType();
+  if (item.reinforcement_type !== 'assemble') {
     await prisma.$executeRaw(Prisma.sql`
       UPDATE word_training_session_items
       SET reinforcement_type = ${reinforcementType}
@@ -1039,7 +1104,11 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     `);
   }
 
-  const assembleTokens = (context?.text ?? `${item.word} ${item.translation}`)
+  const reinforcementSentence = generatedPhrase?.phraseEn || context?.text || `${item.word} ${item.translation}`;
+  const reinforcementSentenceTranslation = generatedPhrase?.phraseRu || item.translation;
+  const reinforcementAudioUrl = generatedPhrase?.phraseAudioUrl || wordPronunciationAudioUrl;
+
+  const assembleTokens = reinforcementSentence
     .split(/\s+/)
     .map((token) => token.trim())
     .filter((token) => token.length > 0)
@@ -1057,10 +1126,11 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     queuePosition: position.position,
     queueTotal: position.total,
     context,
-    pronunciationAudioUrl,
+    pronunciationAudioUrl: reinforcementAudioUrl,
     reinforcement: {
       type: reinforcementType,
-      sentence: context?.text ?? '',
+      sentence: reinforcementSentence,
+      sentenceTranslation: reinforcementSentenceTranslation,
       assembleTokens: assembleTokens.sort(() => Math.random() - 0.5),
       targetWord: item.word,
     },
@@ -1717,6 +1787,81 @@ const listModerationWords = async (params: {
   };
 };
 
+const listGeneratedPhrases = async (params: {
+  limit?: number;
+  offset?: number;
+  search?: string;
+}) => {
+  await ensureWordTrainingTables();
+  const take = clamp(params.limit ?? 50, 1, 200);
+  const skip = Math.max(0, params.offset ?? 0);
+  const search = (params.search ?? '').trim().toLowerCase();
+  const searchSql = search
+    ? Prisma.sql`
+      AND (
+        LOWER(g.word) LIKE ${`%${search}%`}
+        OR LOWER(g.phrase_en) LIKE ${`%${search}%`}
+        OR LOWER(COALESCE(g.phrase_ru, '')) LIKE ${`%${search}%`}
+      )
+    `
+    : Prisma.empty;
+
+  const baseFrom = Prisma.sql`
+    FROM word_training_generated_phrases g
+    ${searchSql}
+  `;
+
+  const [countRow] = await prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+    SELECT COUNT(*) AS total
+    ${baseFrom}
+  `);
+
+  const items = await prisma.$queryRaw<
+    Array<{
+      id: number;
+      yandexCacheId: number;
+      word: string;
+      phraseEn: string;
+      phraseRu: string | null;
+      phraseAudioUrl: string | null;
+      phraseAudioVoice: string | null;
+      sourceModel: string | null;
+      updatedAt: Date;
+    }>
+  >(Prisma.sql`
+    SELECT
+      g.id AS id,
+      g.yandex_cache_id AS yandexCacheId,
+      g.word AS word,
+      g.phrase_en AS phraseEn,
+      g.phrase_ru AS phraseRu,
+      g.phrase_audio_url AS phraseAudioUrl,
+      g.phrase_audio_voice AS phraseAudioVoice,
+      g.source_model AS sourceModel,
+      g.updated_at AS updatedAt
+    ${baseFrom}
+    ORDER BY g.updated_at DESC, g.id DESC
+    LIMIT ${take} OFFSET ${skip}
+  `);
+
+  return {
+    items: items.map((item) => ({
+      id: item.id,
+      yandexCacheId: item.yandexCacheId,
+      word: item.word,
+      phraseEn: item.phraseEn,
+      phraseRu: item.phraseRu,
+      phraseAudioUrl: item.phraseAudioUrl,
+      phraseAudioVoice: item.phraseAudioVoice,
+      sourceModel: item.sourceModel,
+      updatedAt: item.updatedAt,
+    })),
+    total: Number(countRow?.total ?? 0),
+    limit: take,
+    offset: skip,
+  };
+};
+
 const getModerationSnippets = async (
   yandexCacheId: number,
   params: { limit?: number; paddingSeconds?: number },
@@ -1868,6 +2013,7 @@ export const wordTrainingService = {
     return getExamplesByWord(word, limit);
   },
   listModerationWords,
+  listGeneratedPhrases,
   getModerationSnippets,
   saveModerationSelections,
 };

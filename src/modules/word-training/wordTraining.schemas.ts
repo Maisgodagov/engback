@@ -11,7 +11,7 @@ export const submitRecognitionSchema = z.object({
 
 export const submitReinforcementSchema = z.object({
   itemId: z.number().int().positive(),
-  exerciseType: z.enum(['fill-gap', 'assemble']),
+  exerciseType: z.literal('assemble'),
   isCorrect: z.boolean(),
 });
 
