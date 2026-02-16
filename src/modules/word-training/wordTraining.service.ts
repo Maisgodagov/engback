@@ -800,7 +800,7 @@ const getExamplesByWord = async (
   const result = await videoLearningService.searchPhrase(
     normalizedWord,
     Math.max(1, limit),
-    0,
+    1,
     undefined,
     Math.max(10, limit * 4),
     undefined,
