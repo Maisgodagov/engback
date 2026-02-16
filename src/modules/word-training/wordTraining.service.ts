@@ -117,6 +117,16 @@ type WordExample = {
   text: string;
 };
 
+type SnippetModerationFilter = 'all' | 'moderated' | 'unmoderated';
+
+type PreferredSnippetInput = {
+  contentId: number;
+  startSeconds: number;
+  endSeconds: number;
+  matchedText?: string | null;
+  contextText?: string | null;
+};
+
 const SESSION_TARGET_DEFAULT = 20;
 const SESSION_TARGET_MIN = 10;
 const SESSION_TARGET_MAX = 25;
@@ -362,6 +372,26 @@ const ensureWordTrainingTables = async () => {
       created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       KEY idx_word_training_events_session (session_id, created_at),
       KEY idx_word_training_events_user (user_id, created_at)
+    )
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS word_training_preferred_snippets (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      yandex_cache_id INT NOT NULL,
+      content_id INT NOT NULL,
+      start_seconds FLOAT NOT NULL,
+      end_seconds FLOAT NOT NULL,
+      matched_text VARCHAR(255) NULL,
+      context_text TEXT NULL,
+      is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+      created_by_user_id VARCHAR(191) NULL,
+      updated_by_user_id VARCHAR(191) NULL,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      UNIQUE KEY uniq_word_pref_snippet (yandex_cache_id, content_id, start_seconds, end_seconds),
+      KEY idx_word_pref_snippet_word (yandex_cache_id, is_enabled, updated_at),
+      KEY idx_word_pref_snippet_content (content_id)
     )
   `);
 
@@ -794,9 +824,50 @@ const getExamplesByWord = async (
   word: string,
   limit = 3,
   excludeContentId?: number | null,
+  yandexCacheId?: number | null,
 ): Promise<WordExample[]> => {
   const normalizedWord = normalizeWord(word);
   if (!normalizedWord) return [];
+
+  if (yandexCacheId) {
+    const preferredRows = await prisma.$queryRaw<
+      Array<{
+        contentId: number;
+        videoName: string;
+        videoUrl: string | null;
+        startSeconds: number | null;
+        endSeconds: number | null;
+        text: string | null;
+      }>
+    >(Prisma.sql`
+      SELECT
+        ps.content_id AS contentId,
+        vlc.video_name AS videoName,
+        vlc.video_url AS videoUrl,
+        ps.start_seconds AS startSeconds,
+        ps.end_seconds AS endSeconds,
+        COALESCE(NULLIF(ps.context_text, ''), NULLIF(ps.matched_text, ''), SUBSTRING(vlc.transcript_full, 1, 220)) AS text
+      FROM word_training_preferred_snippets ps
+      INNER JOIN video_learning_content vlc ON vlc.id = ps.content_id
+      WHERE ps.yandex_cache_id = ${yandexCacheId}
+        AND ps.is_enabled = 1
+        ${excludeContentId ? Prisma.sql`AND ps.content_id <> ${excludeContentId}` : Prisma.empty}
+      ORDER BY ps.updated_at DESC
+      LIMIT ${Math.max(1, limit)}
+    `);
+
+    if (preferredRows.length > 0) {
+      return preferredRows.map((row) => ({
+        contentId: row.contentId,
+        videoName: row.videoName,
+        videoUrl: row.videoUrl,
+        startSeconds: row.startSeconds,
+        endSeconds: row.endSeconds,
+        text: row.text ?? '',
+      }));
+    }
+  }
+
   const result = await videoLearningService.searchPhrase(
     normalizedWord,
     Math.max(1, limit),
@@ -905,7 +976,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
       text: item.context_text,
     };
   } else {
-    const examples = await getExamplesByWord(item.word, 1);
+    const examples = await getExamplesByWord(item.word, 1, undefined, item.yandex_cache_id);
     context = examples[0] ?? null;
     if (context) {
       await prisma.$executeRaw(Prisma.sql`
@@ -926,6 +997,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
       mode: 'recognition' as const,
       itemId,
       wordKey: item.word_key,
+      yandexCacheId: item.yandex_cache_id,
       word: item.word,
       translation: item.translation,
       sourceType: item.source_type,
@@ -961,6 +1033,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     mode: 'reinforcement' as const,
     itemId,
     wordKey: item.word_key,
+    yandexCacheId: item.yandex_cache_id,
     word: item.word,
     translation: item.translation,
     sourceType: item.source_type,
@@ -1357,7 +1430,12 @@ const submitRecognition = async (
   const state = await buildSessionState(updated);
 
   if (input.grade === 'again' && state.task?.mode === 'recognition') {
-    const alt = await getExamplesByWord(state.task.word, 1, state.task.context?.contentId ?? null);
+    const alt = await getExamplesByWord(
+      state.task.word,
+      1,
+      state.task.context?.contentId ?? null,
+      (state.task as { yandexCacheId?: number | null }).yandexCacheId ?? null,
+    );
     return { ...state, alternateExample: alt[0] ?? null };
   }
   return state;
@@ -1550,6 +1628,220 @@ const finishSession = async (userId: string, sessionId: string, force = false) =
   return buildSessionState(refreshed);
 };
 
+const buildSnippetKey = (contentId: number, startSeconds: number, endSeconds: number): string =>
+  `${contentId}:${startSeconds.toFixed(3)}:${endSeconds.toFixed(3)}`;
+
+const listModerationWords = async (params: {
+  limit?: number;
+  offset?: number;
+  filter?: SnippetModerationFilter;
+  search?: string;
+}) => {
+  await ensureWordTrainingTables();
+  const take = clamp(params.limit ?? 30, 1, 100);
+  const skip = Math.max(0, params.offset ?? 0);
+  const filter = params.filter ?? 'all';
+  const search = (params.search ?? '').trim().toLowerCase();
+  const searchSql = search ? Prisma.sql`AND LOWER(ydc.query) LIKE ${`%${search}%`}` : Prisma.empty;
+  const moderationSql =
+    filter === 'moderated'
+      ? Prisma.sql`AND COALESCE(sel.selected_count, 0) > 0`
+      : filter === 'unmoderated'
+      ? Prisma.sql`AND COALESCE(sel.selected_count, 0) = 0`
+      : Prisma.empty;
+
+  const baseFrom = Prisma.sql`
+    FROM yandex_dictionary_cache ydc
+    LEFT JOIN (
+      SELECT yandex_cache_id, COUNT(*) AS selected_count
+      FROM word_training_preferred_snippets
+      WHERE is_enabled = 1
+      GROUP BY yandex_cache_id
+    ) sel ON sel.yandex_cache_id = ydc.id
+    WHERE ydc.lang = 'en'
+    ${searchSql}
+    ${moderationSql}
+  `;
+
+  const [countRow] = await prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+    SELECT COUNT(*) AS total
+    ${baseFrom}
+  `);
+
+  const items = await prisma.$queryRaw<
+    Array<{
+      yandexCacheId: number;
+      query: string;
+      lang: string;
+      selectedCount: number | null;
+      updatedAt: Date;
+    }>
+  >(Prisma.sql`
+    SELECT
+      ydc.id AS yandexCacheId,
+      ydc.query AS query,
+      ydc.lang AS lang,
+      COALESCE(sel.selected_count, 0) AS selectedCount,
+      ydc.updated_at AS updatedAt
+    ${baseFrom}
+    ORDER BY COALESCE(sel.selected_count, 0) DESC, ydc.updated_at DESC
+    LIMIT ${take} OFFSET ${skip}
+  `);
+
+  return {
+    items: items.map((item) => ({
+      yandexCacheId: item.yandexCacheId,
+      query: item.query,
+      lang: item.lang,
+      selectedCount: Number(item.selectedCount ?? 0),
+      isModerated: Number(item.selectedCount ?? 0) > 0,
+      updatedAt: item.updatedAt,
+    })),
+    total: Number(countRow?.total ?? 0),
+    limit: take,
+    offset: skip,
+  };
+};
+
+const getModerationSnippets = async (
+  yandexCacheId: number,
+  params: { limit?: number; paddingSeconds?: number },
+) => {
+  await ensureWordTrainingTables();
+  const [wordRow] = await prisma.$queryRaw<Array<{ id: number; query: string; lang: string }>>(Prisma.sql`
+    SELECT id, query, lang
+    FROM yandex_dictionary_cache
+    WHERE id = ${yandexCacheId}
+    LIMIT 1
+  `);
+  if (!wordRow) {
+    throw Object.assign(new Error('Word not found'), { status: 404 });
+  }
+
+  const selectedRows = await prisma.$queryRaw<
+    Array<{ contentId: number; startSeconds: number; endSeconds: number }>
+  >(Prisma.sql`
+    SELECT content_id AS contentId, start_seconds AS startSeconds, end_seconds AS endSeconds
+    FROM word_training_preferred_snippets
+    WHERE yandex_cache_id = ${yandexCacheId} AND is_enabled = 1
+  `);
+  const selectedSet = new Set(
+    selectedRows.map((row) =>
+      buildSnippetKey(Number(row.contentId), Number(row.startSeconds), Number(row.endSeconds)),
+    ),
+  );
+
+  const limit = clamp(params.limit ?? 20, 1, 60);
+  const padding = clamp(params.paddingSeconds ?? 1, 0, 10);
+  const result = await videoLearningService.searchPhrase(
+    wordRow.query,
+    limit,
+    padding,
+    undefined,
+    Math.max(40, limit * 8),
+    undefined,
+  );
+
+  return {
+    word: {
+      yandexCacheId: wordRow.id,
+      query: wordRow.query,
+      lang: wordRow.lang,
+    },
+    snippets: result.items.map((item) => {
+      const contentId = Number(item.contentId);
+      const startSeconds = Number(item.startSeconds);
+      const endSeconds = Number(item.endSeconds);
+      const key = buildSnippetKey(contentId, startSeconds, endSeconds);
+      return {
+        contentId,
+        videoName: item.videoName,
+        videoUrl: item.videoUrl,
+        startSeconds,
+        endSeconds,
+        matchedText: item.matchedText,
+        contextText: item.contextText,
+        checked: selectedSet.has(key),
+      };
+    }),
+  };
+};
+
+const saveModerationSelections = async (
+  adminUserId: string,
+  yandexCacheId: number,
+  selected: PreferredSnippetInput[],
+) => {
+  await ensureWordTrainingTables();
+  const [wordRow] = await prisma.$queryRaw<Array<{ id: number }>>(Prisma.sql`
+    SELECT id
+    FROM yandex_dictionary_cache
+    WHERE id = ${yandexCacheId}
+    LIMIT 1
+  `);
+  if (!wordRow) {
+    throw Object.assign(new Error('Word not found'), { status: 404 });
+  }
+
+  const normalized = selected
+    .map((item) => ({
+      contentId: Number(item.contentId),
+      startSeconds: Number(item.startSeconds),
+      endSeconds: Number(item.endSeconds),
+      matchedText: item.matchedText?.trim() || null,
+      contextText: item.contextText?.trim() || null,
+    }))
+    .filter(
+      (item) =>
+        Number.isFinite(item.contentId) &&
+        Number.isFinite(item.startSeconds) &&
+        Number.isFinite(item.endSeconds) &&
+        item.contentId > 0 &&
+        item.endSeconds > item.startSeconds,
+    );
+
+  const dedup = new Map<string, (typeof normalized)[number]>();
+  normalized.forEach((item) => {
+    dedup.set(buildSnippetKey(item.contentId, item.startSeconds, item.endSeconds), item);
+  });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw(Prisma.sql`
+      DELETE FROM word_training_preferred_snippets
+      WHERE yandex_cache_id = ${yandexCacheId}
+    `);
+
+    for (const item of dedup.values()) {
+      await tx.$executeRaw(Prisma.sql`
+        INSERT INTO word_training_preferred_snippets (
+          yandex_cache_id,
+          content_id,
+          start_seconds,
+          end_seconds,
+          matched_text,
+          context_text,
+          is_enabled,
+          created_by_user_id,
+          updated_by_user_id
+        )
+        VALUES (
+          ${yandexCacheId},
+          ${item.contentId},
+          ${item.startSeconds},
+          ${item.endSeconds},
+          ${item.matchedText},
+          ${item.contextText},
+          1,
+          ${adminUserId},
+          ${adminUserId}
+        )
+      `);
+    }
+  });
+
+  return { yandexCacheId, selectedCount: dedup.size };
+};
+
 export const wordTrainingService = {
   loadOverview,
   startSession,
@@ -1561,4 +1853,7 @@ export const wordTrainingService = {
     await ensureWordTrainingTables();
     return getExamplesByWord(word, limit);
   },
+  listModerationWords,
+  getModerationSnippets,
+  saveModerationSelections,
 };

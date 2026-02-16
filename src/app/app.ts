@@ -18,6 +18,7 @@ import { readingRouter } from '../modules/reading/reading.router';
 import { shareRouter } from '../modules/share/share.router';
 import { shareApiRouter } from '../modules/share/share.api.router';
 import { wordTrainingRouter } from '../modules/word-training/wordTraining.router';
+import { wordTrainingAdminRouter } from '../modules/word-training/wordTrainingAdmin.router';
 
 export const createApp = () => {
   const app = express();
@@ -74,6 +75,7 @@ export const createApp = () => {
   app.use('/api/game-snippets', publicGameSnippetsRouter);
   app.use('/api/reading', readingRouter);
   app.use('/api/word-training', wordTrainingRouter);
+  app.use('/api/admin/word-training-snippets', wordTrainingAdminRouter);
   app.use('/api/share', shareApiRouter);
   app.use('/share', shareRouter);
   
