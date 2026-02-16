@@ -395,6 +395,17 @@ const ensureWordTrainingTables = async () => {
     )
   `);
 
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS exercise_excluded_words (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      word_id INT NOT NULL,
+      created_by_user_id VARCHAR(191) NULL,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      UNIQUE KEY uniq_exercise_excluded_word_id (word_id),
+      INDEX idx_exercise_excluded_created_by (created_by_user_id)
+    )
+  `);
+
   tablesReady = true;
 };
 
@@ -601,34 +612,36 @@ const syncProgressFromSources = async (userId: string): Promise<void> => {
 const loadProgress = async (userId: string): Promise<ProgressRow[]> =>
   prisma.$queryRaw<ProgressRow[]>(Prisma.sql`
     SELECT
-      id,
-      user_id,
-      word_key,
-      word,
-      translation,
-      source_type,
-      source_weight,
-      source_updated_at,
-      yandex_cache_id,
-      status,
-      srs_stage,
-      ease_factor,
-      interval_days,
-      due_at,
-      last_reviewed_at,
-      next_due_at,
-      review_count,
-      correct_count,
-      wrong_count,
-      forgotten_count,
-      hard_count,
-      good_count,
-      easy_count,
-      last_grade,
-      created_at,
-      updated_at
-    FROM word_training_progress
-    WHERE user_id = ${userId}
+      p.id,
+      p.user_id,
+      p.word_key,
+      p.word,
+      p.translation,
+      p.source_type,
+      p.source_weight,
+      p.source_updated_at,
+      p.yandex_cache_id,
+      p.status,
+      p.srs_stage,
+      p.ease_factor,
+      p.interval_days,
+      p.due_at,
+      p.last_reviewed_at,
+      p.next_due_at,
+      p.review_count,
+      p.correct_count,
+      p.wrong_count,
+      p.forgotten_count,
+      p.hard_count,
+      p.good_count,
+      p.easy_count,
+      p.last_grade,
+      p.created_at,
+      p.updated_at
+    FROM word_training_progress p
+    LEFT JOIN exercise_excluded_words ex ON ex.word_id = p.yandex_cache_id
+    WHERE p.user_id = ${userId}
+      AND ex.word_id IS NULL
   `);
 
 const buildDailyQueue = (rows: ProgressRow[], requestedTarget: number): {
@@ -896,12 +909,14 @@ const getRecognitionOptions = async (
   if (!correct) return [];
 
   const rows = await prisma.$queryRaw<Array<{ translation: string }>>(Prisma.sql`
-    SELECT translation
-    FROM word_training_progress
-    WHERE user_id = ${userId}
-      AND word_key <> ${wordKey}
-      AND translation IS NOT NULL
-      AND TRIM(translation) <> ''
+    SELECT p.translation AS translation
+    FROM word_training_progress p
+    LEFT JOIN exercise_excluded_words ex ON ex.word_id = p.yandex_cache_id
+    WHERE p.user_id = ${userId}
+      AND p.word_key <> ${wordKey}
+      AND p.translation IS NOT NULL
+      AND TRIM(p.translation) <> ''
+      AND ex.word_id IS NULL
     ORDER BY RAND()
     LIMIT 40
   `);
@@ -927,10 +942,18 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
   let context = null as null | WordExample;
 
   if (item.context_content_id && item.context_text) {
+    const [contentRow] = await prisma.$queryRaw<
+      Array<{ videoName: string; videoUrl: string | null }>
+    >(Prisma.sql`
+      SELECT video_name AS videoName, video_url AS videoUrl
+      FROM video_learning_content
+      WHERE id = ${item.context_content_id}
+      LIMIT 1
+    `);
     context = {
       contentId: item.context_content_id,
-      videoName: '',
-      videoUrl: null,
+      videoName: contentRow?.videoName ?? '',
+      videoUrl: contentRow?.videoUrl ?? null,
       startSeconds: item.context_start_seconds,
       endSeconds: item.context_end_seconds,
       text: item.context_text,
@@ -1083,13 +1106,15 @@ const loadOverview = async (userId: string) => {
     }>
   >(Prisma.sql`
     SELECT
-      SUM(CASE WHEN status IN ('learning', 'review') AND (due_at IS NULL OR due_at <= NOW(3)) THEN 1 ELSE 0 END) AS dueCount,
-      SUM(CASE WHEN wrong_count > 0 THEN 1 ELSE 0 END) AS mistakeCount,
-      SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END) AS newCount,
-      SUM(CASE WHEN status = 'mastered' THEN 1 ELSE 0 END) AS masteredCount,
+      SUM(CASE WHEN p.status IN ('learning', 'review') AND (p.due_at IS NULL OR p.due_at <= NOW(3)) THEN 1 ELSE 0 END) AS dueCount,
+      SUM(CASE WHEN p.wrong_count > 0 THEN 1 ELSE 0 END) AS mistakeCount,
+      SUM(CASE WHEN p.status = 'new' THEN 1 ELSE 0 END) AS newCount,
+      SUM(CASE WHEN p.status = 'mastered' THEN 1 ELSE 0 END) AS masteredCount,
       COUNT(*) AS knownCount
-    FROM word_training_progress
-    WHERE user_id = ${userId}
+    FROM word_training_progress p
+    LEFT JOIN exercise_excluded_words ex ON ex.word_id = p.yandex_cache_id
+    WHERE p.user_id = ${userId}
+      AND ex.word_id IS NULL
   `);
 
   const today = getTodayDateOnly();
