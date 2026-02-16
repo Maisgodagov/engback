@@ -824,49 +824,9 @@ const getExamplesByWord = async (
   word: string,
   limit = 3,
   excludeContentId?: number | null,
-  yandexCacheId?: number | null,
 ): Promise<WordExample[]> => {
   const normalizedWord = normalizeWord(word);
   if (!normalizedWord) return [];
-
-  if (yandexCacheId) {
-    const preferredRows = await prisma.$queryRaw<
-      Array<{
-        contentId: number;
-        videoName: string;
-        videoUrl: string | null;
-        startSeconds: number | null;
-        endSeconds: number | null;
-        text: string | null;
-      }>
-    >(Prisma.sql`
-      SELECT
-        ps.content_id AS contentId,
-        vlc.video_name AS videoName,
-        vlc.video_url AS videoUrl,
-        ps.start_seconds AS startSeconds,
-        ps.end_seconds AS endSeconds,
-        COALESCE(NULLIF(ps.context_text, ''), NULLIF(ps.matched_text, ''), SUBSTRING(vlc.transcript_full, 1, 220)) AS text
-      FROM word_training_preferred_snippets ps
-      INNER JOIN video_learning_content vlc ON vlc.id = ps.content_id
-      WHERE ps.yandex_cache_id = ${yandexCacheId}
-        AND ps.is_enabled = 1
-        ${excludeContentId ? Prisma.sql`AND ps.content_id <> ${excludeContentId}` : Prisma.empty}
-      ORDER BY ps.updated_at DESC
-      LIMIT ${Math.max(1, limit)}
-    `);
-
-    if (preferredRows.length > 0) {
-      return preferredRows.map((row) => ({
-        contentId: row.contentId,
-        videoName: row.videoName,
-        videoUrl: row.videoUrl,
-        startSeconds: row.startSeconds,
-        endSeconds: row.endSeconds,
-        text: row.text ?? '',
-      }));
-    }
-  }
 
   const result = await videoLearningService.searchPhrase(
     normalizedWord,
@@ -976,7 +936,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
       text: item.context_text,
     };
   } else {
-    const examples = await getExamplesByWord(item.word, 1, undefined, item.yandex_cache_id);
+    const examples = await getExamplesByWord(item.word, 1);
     context = examples[0] ?? null;
     if (context) {
       await prisma.$executeRaw(Prisma.sql`
@@ -1430,12 +1390,7 @@ const submitRecognition = async (
   const state = await buildSessionState(updated);
 
   if (input.grade === 'again' && state.task?.mode === 'recognition') {
-    const alt = await getExamplesByWord(
-      state.task.word,
-      1,
-      state.task.context?.contentId ?? null,
-      (state.task as { yandexCacheId?: number | null }).yandexCacheId ?? null,
-    );
+    const alt = await getExamplesByWord(state.task.word, 1, state.task.context?.contentId ?? null);
     return { ...state, alternateExample: alt[0] ?? null };
   }
   return state;
