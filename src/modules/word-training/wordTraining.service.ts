@@ -1818,8 +1818,8 @@ const listGeneratedPhrases = async (params: {
 
   const items = await prisma.$queryRaw<
     Array<{
-      id: number;
-      yandexCacheId: number;
+      id: bigint | number;
+      yandexCacheId: bigint | number;
       word: string;
       phraseEn: string;
       phraseRu: string | null;
@@ -1846,8 +1846,8 @@ const listGeneratedPhrases = async (params: {
 
   return {
     items: items.map((item) => ({
-      id: item.id,
-      yandexCacheId: item.yandexCacheId,
+      id: Number(item.id),
+      yandexCacheId: Number(item.yandexCacheId),
       word: item.word,
       phraseEn: item.phraseEn,
       phraseRu: item.phraseRu,
