@@ -936,10 +936,42 @@ const getRecognitionOptions = async (
   return shuffleArray([correct, ...distractors]).slice(0, 4);
 };
 
+const getPronunciationAudioUrl = async (
+  yandexCacheId: number | null,
+  word: string,
+): Promise<string | null> => {
+  if (yandexCacheId) {
+    const [row] = await prisma.$queryRaw<Array<{ audioUrl: string | null }>>(Prisma.sql`
+      SELECT pronunciation_audio_url AS audioUrl
+      FROM yandex_dictionary_cache
+      WHERE id = ${yandexCacheId}
+      LIMIT 1
+    `);
+    if (row?.audioUrl && row.audioUrl.trim()) return row.audioUrl.trim();
+  }
+
+  const normalizedWord = normalizeWord(word);
+  if (!normalizedWord) return null;
+
+  const [fallback] = await prisma.$queryRaw<Array<{ audioUrl: string | null }>>(Prisma.sql`
+    SELECT pronunciation_audio_url AS audioUrl
+    FROM yandex_dictionary_cache
+    WHERE LOWER(query) = ${normalizedWord}
+      AND LOWER(lang) REGEXP '^en([_-].+)?$'
+      AND pronunciation_audio_url IS NOT NULL
+      AND TRIM(pronunciation_audio_url) <> ''
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `);
+
+  return fallback?.audioUrl?.trim() || null;
+};
+
 const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) => {
   const itemId = Number(item.id);
   const position = await getQueuePosition(sessionId, itemId);
   let context = null as null | WordExample;
+  const pronunciationAudioUrl = await getPronunciationAudioUrl(item.yandex_cache_id, item.word);
 
   if (item.context_content_id && item.context_text) {
     const [contentRow] = await prisma.$queryRaw<
@@ -989,6 +1021,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
       queuePosition: position.position,
       queueTotal: position.total,
       context,
+      pronunciationAudioUrl,
       recognitionOptions,
       showReinforcementAfter:
         item.initial_stage >= 2 ||
@@ -1024,6 +1057,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     queuePosition: position.position,
     queueTotal: position.total,
     context,
+    pronunciationAudioUrl,
     reinforcement: {
       type: reinforcementType,
       sentence: context?.text ?? '',
