@@ -10,6 +10,7 @@ export interface MuellerLookupResult {
   translations: string[];
   synonyms?: string[];
   cefrLevel?: string | null;
+  audioUrl?: string | null;
 }
 
 type LookupLang = 'en' | 'ru';
@@ -101,6 +102,26 @@ const getCefrLevelForQuery = async (query: string): Promise<string | null> => {
       LIMIT 1
     `);
     return rows[0]?.cefr_level ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const getPronunciationAudioUrlForQuery = async (
+  query: string,
+): Promise<string | null> => {
+  try {
+    const rows = await prisma.$queryRaw<Array<{ audio_url: string | null }>>(Prisma.sql`
+      SELECT pronunciation_audio_url AS audio_url
+      FROM yandex_dictionary_cache
+      WHERE query = ${query}
+        AND lang IN ('en', 'en-en')
+        AND pronunciation_audio_url IS NOT NULL
+        AND TRIM(pronunciation_audio_url) <> ''
+      ORDER BY CASE WHEN lang = 'en' THEN 0 ELSE 1 END, updated_at DESC
+      LIMIT 1
+    `);
+    return rows[0]?.audio_url?.trim() ?? null;
   } catch {
     return null;
   }
@@ -236,6 +257,7 @@ export const muellerService = {
           const yandexResults = buildYandexEntries(normalized, lang, yandexResponse);
           if (yandexResults.length) {
             const cefrLevel = lang === 'en' ? await getCefrLevelForQuery(normalized) : null;
+            const audioUrl = lang === 'en' ? await getPronunciationAudioUrlForQuery(normalized) : null;
             if (lang === 'en') {
               const synonymsResponse = await lookupViaYandex(normalized, 'en-en', 'en-en');
               const synonyms = synonymsResponse
@@ -262,6 +284,11 @@ export const muellerService = {
             if (cefrLevel) {
               yandexResults.forEach((item) => {
                 item.cefrLevel = cefrLevel;
+              });
+            }
+            if (audioUrl) {
+              yandexResults.forEach((item) => {
+                item.audioUrl = audioUrl;
               });
             }
             return yandexResults;
@@ -291,12 +318,14 @@ export const muellerService = {
 
     if (exactMatch.length > 0) {
       const cefrLevel = await getCefrLevelForQuery(normalized);
+      const audioUrl = await getPronunciationAudioUrlForQuery(normalized);
       return exactMatch.map(row => ({
         id: row.id,
         word: row.word,
         partOfSpeech: row.part_of_speech,
         translations: row.translations.split('||').filter(Boolean),
         cefrLevel,
+        audioUrl,
       }));
     }
 
@@ -315,12 +344,14 @@ export const muellerService = {
 
     if (prefixMatch.length > 0) {
       const cefrLevel = await getCefrLevelForQuery(normalized);
+      const audioUrl = await getPronunciationAudioUrlForQuery(normalized);
       return prefixMatch.map(row => ({
         id: row.id,
         word: row.word,
         partOfSpeech: row.part_of_speech,
         translations: row.translations.split('||').filter(Boolean),
         cefrLevel,
+        audioUrl,
       }));
     }
 
@@ -338,12 +369,14 @@ export const muellerService = {
     `);
 
     const cefrLevel = await getCefrLevelForQuery(normalized);
+    const audioUrl = await getPronunciationAudioUrlForQuery(normalized);
     return fulltextMatch.map(row => ({
       id: row.id,
       word: row.word,
       partOfSpeech: row.part_of_speech,
       translations: row.translations.split('||').filter(Boolean),
       cefrLevel,
+      audioUrl,
     }));
   },
 
