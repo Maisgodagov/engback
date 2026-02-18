@@ -9,6 +9,7 @@ export interface MuellerLookupResult {
   partOfSpeech: string | null;
   translations: string[];
   synonyms?: string[];
+  cefrLevel?: string | null;
 }
 
 type LookupLang = 'en' | 'ru';
@@ -86,6 +87,23 @@ const extractYandexTranslations = (response: YandexDictResponse) => {
     });
   });
   return uniq(translations);
+};
+
+const getCefrLevelForQuery = async (query: string): Promise<string | null> => {
+  try {
+    const rows = await prisma.$queryRaw<Array<{ cefr_level: string | null }>>(Prisma.sql`
+      SELECT cefr_level
+      FROM yandex_dictionary_cache
+      WHERE query = ${query}
+        AND lang IN ('en', 'en-en')
+        AND cefr_level IS NOT NULL
+      ORDER BY CASE WHEN lang = 'en' THEN 0 ELSE 1 END, updated_at DESC
+      LIMIT 1
+    `);
+    return rows[0]?.cefr_level ?? null;
+  } catch {
+    return null;
+  }
 };
 
 export const buildYandexEntries = (
@@ -217,6 +235,7 @@ export const muellerService = {
         if (yandexResponse) {
           const yandexResults = buildYandexEntries(normalized, lang, yandexResponse);
           if (yandexResults.length) {
+            const cefrLevel = lang === 'en' ? await getCefrLevelForQuery(normalized) : null;
             if (lang === 'en') {
               const synonymsResponse = await lookupViaYandex(normalized, 'en-en', 'en-en');
               const synonyms = synonymsResponse
@@ -239,6 +258,11 @@ export const muellerService = {
               if (ruTranslations.length) {
                 yandexResults[0].translations = ruTranslations;
               }
+            }
+            if (cefrLevel) {
+              yandexResults.forEach((item) => {
+                item.cefrLevel = cefrLevel;
+              });
             }
             return yandexResults;
           }
@@ -266,11 +290,13 @@ export const muellerService = {
     `);
 
     if (exactMatch.length > 0) {
+      const cefrLevel = await getCefrLevelForQuery(normalized);
       return exactMatch.map(row => ({
         id: row.id,
         word: row.word,
         partOfSpeech: row.part_of_speech,
         translations: row.translations.split('||').filter(Boolean),
+        cefrLevel,
       }));
     }
 
@@ -288,11 +314,13 @@ export const muellerService = {
     `);
 
     if (prefixMatch.length > 0) {
+      const cefrLevel = await getCefrLevelForQuery(normalized);
       return prefixMatch.map(row => ({
         id: row.id,
         word: row.word,
         partOfSpeech: row.part_of_speech,
         translations: row.translations.split('||').filter(Boolean),
+        cefrLevel,
       }));
     }
 
@@ -309,11 +337,13 @@ export const muellerService = {
       LIMIT 10
     `);
 
+    const cefrLevel = await getCefrLevelForQuery(normalized);
     return fulltextMatch.map(row => ({
       id: row.id,
       word: row.word,
       partOfSpeech: row.part_of_speech,
       translations: row.translations.split('||').filter(Boolean),
+      cefrLevel,
     }));
   },
 
