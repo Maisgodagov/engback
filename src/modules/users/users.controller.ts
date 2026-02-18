@@ -2,6 +2,8 @@ import type { Request, Response } from 'express';
 
 import { usersService } from './users.service';
 
+const CEFR_LEVELS = new Set(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']);
+
 export const list = async (req: Request, res: Response) => {
   // Add pagination support for 1000+ users
   const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
@@ -53,6 +55,23 @@ export const getStreakHistory = async (req: Request, res: Response) => {
     return;
   }
   const result = await usersService.getStreakHistory(userId);
+  res.json(result);
+};
+
+export const updateLevel = async (req: Request, res: Response) => {
+  const userId = getUserId(req);
+  if (!userId) {
+    res.status(401).json({ message: 'Missing user identifier' });
+    return;
+  }
+
+  const rawLevel = String((req.body as any)?.level ?? '').trim().toUpperCase();
+  if (!CEFR_LEVELS.has(rawLevel)) {
+    res.status(400).json({ message: 'level must be one of A1, A2, B1, B2, C1, C2' });
+    return;
+  }
+
+  const result = await usersService.updateLevel(userId, rawLevel);
   res.json(result);
 };
 

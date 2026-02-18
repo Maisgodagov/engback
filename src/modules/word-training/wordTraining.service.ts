@@ -50,6 +50,7 @@ type ProgressRow = {
   last_grade: RecognitionGrade | null;
   created_at: Date;
   updated_at: Date;
+  cefr_level?: string | null;
 };
 
 type SessionRow = {
@@ -173,6 +174,7 @@ const RECOGNITION_ENERGY_COST = 4;
 const REINFORCEMENT_ENERGY_COST = 3;
 const SOURCE_LIMIT = 500;
 const MAX_RETRY_ATTEMPTS = 2;
+const CEFR_LEVELS: Array<'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2'> = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 
 let tablesReady = false;
 
@@ -189,6 +191,10 @@ const normalizeWord = (value: string): string =>
     .trim();
 
 const normalizeText = (value: string): string => value.trim().replace(/\s+/g, ' ');
+const normalizeCefrLevel = (value: string | null | undefined): string | null => {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  return CEFR_LEVELS.includes(normalized as (typeof CEFR_LEVELS)[number]) ? normalized : null;
+};
 
 const normalizeOptionText = (value: string): string =>
   value
@@ -694,19 +700,28 @@ const loadProgress = async (userId: string): Promise<ProgressRow[]> =>
       p.easy_count,
       p.last_grade,
       p.created_at,
-      p.updated_at
+      p.updated_at,
+      ydc.cefr_level
     FROM word_training_progress p
+    INNER JOIN yandex_dictionary_cache ydc ON ydc.id = p.yandex_cache_id
     LEFT JOIN exercise_excluded_words ex ON ex.word_id = p.yandex_cache_id
     WHERE p.user_id = ${userId}
+      AND ydc.cefr_level IS NOT NULL
+      AND TRIM(ydc.cefr_level) <> ''
       AND ex.word_id IS NULL
   `);
 
-const buildDailyQueue = (rows: ProgressRow[], requestedTarget: number): {
+const buildDailyQueue = (rows: ProgressRow[], requestedTarget: number, userLevel: string): {
   queue: QueueDraftItem[];
   reviewCount: number;
   mistakeCount: number;
   newCount: number;
 } => {
+  const normalizedUserLevel = normalizeCefrLevel(userLevel) ?? 'A1';
+  const levelIndex = CEFR_LEVELS.indexOf(normalizedUserLevel as (typeof CEFR_LEVELS)[number]);
+  const lowerLevel = levelIndex > 0 ? CEFR_LEVELS[levelIndex - 1] : null;
+  const higherLevel = levelIndex < CEFR_LEVELS.length - 1 ? CEFR_LEVELS[levelIndex + 1] : null;
+
   const now = Date.now();
   const target = clamp(requestedTarget, SESSION_TARGET_MIN, SESSION_TARGET_MAX);
   const newLimit = Math.min(7, Math.max(5, Math.floor(target * 0.28)));
@@ -714,18 +729,29 @@ const buildDailyQueue = (rows: ProgressRow[], requestedTarget: number): {
   const mistakeTarget = Math.min(6, Math.max(3, Math.floor(target * 0.25)));
 
   const scored = rows.map((row) => {
+    const cefrLevel = normalizeCefrLevel(row.cefr_level) ?? 'A1';
     const dueTs = row.due_at?.getTime() ?? 0;
     const overdueHours = dueTs > 0 && dueTs <= now ? Math.floor((now - dueTs) / 3_600_000) : 0;
     const accuracy = row.review_count > 0 ? row.correct_count / row.review_count : 0;
     const mistakePressure = row.wrong_count * 3 + Math.round((1 - accuracy) * 10);
     return {
       row,
+      cefrLevel,
       overdueHours,
       mistakePressure,
     };
   });
 
-  const reviewPool = scored
+  const filtered = scored.filter(({ cefrLevel }) => {
+    if (cefrLevel === normalizedUserLevel) return true;
+    if (lowerLevel && cefrLevel === lowerLevel) return true;
+    if (higherLevel && cefrLevel === higherLevel) return true;
+    return false;
+  });
+
+  const levelScoped = filtered.length ? filtered : scored;
+
+  const reviewPool = levelScoped
     .filter(
       ({ row }) =>
         (row.due_at && row.due_at.getTime() <= now) ||
@@ -737,7 +763,7 @@ const buildDailyQueue = (rows: ProgressRow[], requestedTarget: number): {
       return b.row.source_weight - a.row.source_weight;
     });
 
-  const mistakePool = scored
+  const mistakePool = levelScoped
     .filter(
       ({ row, mistakePressure }) =>
         (row.status === 'learning' || row.status === 'review') &&
@@ -748,7 +774,7 @@ const buildDailyQueue = (rows: ProgressRow[], requestedTarget: number): {
       return b.row.source_weight - a.row.source_weight;
     });
 
-  const newPool = scored
+  const newPool = levelScoped
     .filter(({ row }) => row.status === 'new')
     .sort((a, b) => {
       if (b.row.source_weight !== a.row.source_weight) return b.row.source_weight - a.row.source_weight;
@@ -757,12 +783,35 @@ const buildDailyQueue = (rows: ProgressRow[], requestedTarget: number): {
 
   const selected = new Set<string>();
   const queue: QueueDraftItem[] = [];
+  const lowerQuota = lowerLevel ? Math.max(1, Math.floor(target * 0.15)) : 0;
+  const higherQuota = higherLevel ? Math.max(1, Math.floor(target * 0.15)) : 0;
+  const currentQuota = Math.max(1, target - lowerQuota - higherQuota);
+  const quotas = new Map<string, number>([
+    [normalizedUserLevel, currentQuota],
+    ...(lowerLevel ? [[lowerLevel, lowerQuota] as const] : []),
+    ...(higherLevel ? [[higherLevel, higherQuota] as const] : []),
+  ]);
+  const taken = new Map<string, number>();
+  const canTakeByQuota = (cefrLevel: string): boolean => {
+    const quota = quotas.get(cefrLevel);
+    if (quota === undefined) return true;
+    return (taken.get(cefrLevel) ?? 0) < quota;
+  };
+  const markTaken = (cefrLevel: string) => {
+    taken.set(cefrLevel, (taken.get(cefrLevel) ?? 0) + 1);
+  };
 
-  const pushFromPool = (pool: typeof reviewPool, reason: QueueReason, limit: number) => {
+  const pushFromPool = (
+    pool: typeof reviewPool,
+    reason: QueueReason,
+    limit: number,
+    enforceQuota = true,
+  ) => {
     for (const item of pool) {
       if (queue.length >= target) break;
       if (selected.has(item.row.word_key)) continue;
       if (limit <= 0) break;
+      if (enforceQuota && !canTakeByQuota(item.cefrLevel)) continue;
       queue.push({
         wordKey: item.row.word_key,
         word: item.row.word,
@@ -775,6 +824,7 @@ const buildDailyQueue = (rows: ProgressRow[], requestedTarget: number): {
         initialStage: item.row.srs_stage,
       });
       selected.add(item.row.word_key);
+      markTaken(item.cefrLevel);
       limit -= 1;
     }
   };
@@ -784,7 +834,13 @@ const buildDailyQueue = (rows: ProgressRow[], requestedTarget: number): {
   pushFromPool(newPool, 'new', newLimit);
 
   if (queue.length < target) {
-    const fallback = scored.sort((a, b) => {
+    pushFromPool(reviewPool, 'review', target, false);
+    pushFromPool(mistakePool, 'mistake', target, false);
+    pushFromPool(newPool, 'new', target, false);
+  }
+
+  if (queue.length < target) {
+    const fallback = levelScoped.sort((a, b) => {
       if (b.row.source_weight !== a.row.source_weight) return b.row.source_weight - a.row.source_weight;
       return b.row.source_updated_at.getTime() - a.row.source_updated_at.getTime();
     });
@@ -968,11 +1024,14 @@ const getRecognitionOptions = async (
   const rows = await prisma.$queryRaw<Array<{ translation: string }>>(Prisma.sql`
     SELECT p.translation AS translation
     FROM word_training_progress p
+    INNER JOIN yandex_dictionary_cache ydc ON ydc.id = p.yandex_cache_id
     LEFT JOIN exercise_excluded_words ex ON ex.word_id = p.yandex_cache_id
     WHERE p.user_id = ${userId}
       AND p.word_key <> ${wordKey}
       AND p.translation IS NOT NULL
       AND TRIM(p.translation) <> ''
+      AND ydc.cefr_level IS NOT NULL
+      AND TRIM(ydc.cefr_level) <> ''
       AND ex.word_id IS NULL
     ORDER BY RAND()
     LIMIT 40
@@ -1089,6 +1148,8 @@ const getDistractorWords = async (excludeWord: string, take = 3): Promise<string
     WHERE LOWER(lang) REGEXP '^en([_-].+)?$'
       AND query REGEXP '[A-Za-z]'
       AND LOWER(query) <> ${normalizedExclude}
+      AND cefr_level IS NOT NULL
+      AND TRIM(cefr_level) <> ''
     ORDER BY RAND()
     LIMIT 120
   `);
@@ -1118,6 +1179,8 @@ const getFallbackPairsFromYandex = async (
     WHERE LOWER(lang) REGEXP '^en([_-].+)?$'
       AND query REGEXP '[A-Za-z]'
       AND LOWER(query) <> ${excludeWordKey}
+      AND cefr_level IS NOT NULL
+      AND TRIM(cefr_level) <> ''
     ORDER BY RAND()
     LIMIT 120
   `);
@@ -1222,6 +1285,7 @@ const buildMatchPairsExercise = async (
   >(Prisma.sql`
     SELECT p.word AS word, p.translation AS translation, p.yandex_cache_id AS yandexCacheId
     FROM word_training_progress p
+    INNER JOIN yandex_dictionary_cache ydc ON ydc.id = p.yandex_cache_id
     LEFT JOIN exercise_excluded_words ex ON ex.word_id = p.yandex_cache_id
     WHERE p.user_id = ${userId}
       AND p.word_key <> ${current.wordKey}
@@ -1229,6 +1293,8 @@ const buildMatchPairsExercise = async (
       AND TRIM(p.word) <> ''
       AND p.translation IS NOT NULL
       AND TRIM(p.translation) <> ''
+      AND ydc.cefr_level IS NOT NULL
+      AND TRIM(ydc.cefr_level) <> ''
       AND ex.word_id IS NULL
     ORDER BY RAND()
     LIMIT 40
@@ -1480,8 +1546,11 @@ const loadOverview = async (userId: string) => {
       SUM(CASE WHEN p.status = 'mastered' THEN 1 ELSE 0 END) AS masteredCount,
       COUNT(*) AS knownCount
     FROM word_training_progress p
+    INNER JOIN yandex_dictionary_cache ydc ON ydc.id = p.yandex_cache_id
     LEFT JOIN exercise_excluded_words ex ON ex.word_id = p.yandex_cache_id
     WHERE p.user_id = ${userId}
+      AND ydc.cefr_level IS NOT NULL
+      AND TRIM(ydc.cefr_level) <> ''
       AND ex.word_id IS NULL
   `);
 
@@ -1540,6 +1609,10 @@ const startSession = async (userId: string, targetWords?: number) => {
   }
 
   await syncProgressFromSources(userId);
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { level: true },
+  });
   const progressRows = await loadProgress(userId);
   if (!progressRows.length) {
     throw Object.assign(new Error('Нет слов для тренировки. Добавьте слова в словарь или откройте переводы в видео.'), {
@@ -1552,7 +1625,7 @@ const startSession = async (userId: string, targetWords?: number) => {
     SESSION_TARGET_MIN,
     SESSION_TARGET_MAX,
   );
-  const queueBuild = buildDailyQueue(progressRows, requestedTarget);
+  const queueBuild = buildDailyQueue(progressRows, requestedTarget, user?.level ?? 'A1');
   if (!queueBuild.queue.length) {
     throw Object.assign(new Error('Сегодня нет слов для тренировки. Возвращайтесь позже.'), {
       status: 400,

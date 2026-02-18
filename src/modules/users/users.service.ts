@@ -167,5 +167,13 @@ export const usersService = {
 
     return { xpPoints: updated.xpPoints };
   },
+  updateLevel: async (userId: string, level: string): Promise<{ level: string }> => {
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: { level },
+      select: { level: true },
+    });
+    return { level: updated.level };
+  },
 };
 
