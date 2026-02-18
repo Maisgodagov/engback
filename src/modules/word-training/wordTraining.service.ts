@@ -10,7 +10,7 @@ type QueueReason = 'review' | 'mistake' | 'new' | 'retry';
 type SessionStatus = 'active' | 'completed' | 'interrupted';
 type ProgressStatus = 'new' | 'learning' | 'review' | 'mastered';
 type RecognitionGrade = 'again' | 'hard' | 'good' | 'easy';
-type ExerciseType = 'assemble';
+type ExerciseType = 'missing' | 'audio_assemble' | 'match_pairs';
 
 type SourceCandidate = {
   wordKey: string;
@@ -123,6 +123,38 @@ type GeneratedPhrase = {
   phraseAudioUrl: string | null;
 };
 
+type MissingExercisePayload = {
+  type: 'missing';
+  sentence: string;
+  sentenceWithBlank: string;
+  sentenceTranslation?: string | null;
+  options: string[];
+  correctWord: string;
+  targetWord: string;
+  phraseAudioUrl?: string | null;
+};
+
+type AudioAssembleExercisePayload = {
+  type: 'audio_assemble';
+  sentence: string;
+  sentenceTranslation?: string | null;
+  phraseAudioUrl?: string | null;
+  assembleTokens: string[];
+  targetTokens: string[];
+  targetWord: string;
+};
+
+type MatchPairsExercisePayload = {
+  type: 'match_pairs';
+  targetWord: string;
+  pairs: Array<{
+    word: string;
+    translation: string;
+    pronunciationAudioUrl?: string | null;
+  }>;
+  shuffledTranslations: string[];
+};
+
 type SnippetModerationFilter = 'all' | 'moderated' | 'unmoderated';
 
 type PreferredSnippetInput = {
@@ -155,6 +187,8 @@ const normalizeWord = (value: string): string =>
     .replace(/[^a-z0-9'\s-]+/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+const normalizeText = (value: string): string => value.trim().replace(/\s+/g, ' ');
 
 const normalizeOptionText = (value: string): string =>
   value
@@ -269,7 +303,10 @@ const xpForGrade = (grade: RecognitionGrade): number => {
   return 4;
 };
 
-const pickReinforcementType = (): ExerciseType => 'assemble';
+const pickReinforcementType = (): ExerciseType => {
+  const variants: ExerciseType[] = ['missing', 'audio_assemble', 'match_pairs'];
+  return variants[Math.floor(Math.random() * variants.length)];
+};
 
 const ensureWordTrainingTables = async () => {
   if (tablesReady) return;
@@ -1031,6 +1068,218 @@ const getGeneratedPhraseForWord = async (
   };
 };
 
+const cleanWordToken = (token: string): string =>
+  token
+    .replace(/^[^A-Za-z'-]+/g, '')
+    .replace(/[^A-Za-z'-]+$/g, '')
+    .trim();
+
+const buildSentenceTokens = (sentence: string): string[] =>
+  sentence
+    .split(/\s+/)
+    .map((token) => cleanWordToken(token))
+    .filter((token) => token.length > 0 && /[A-Za-z]/.test(token))
+    .slice(0, 12);
+
+const getDistractorWords = async (excludeWord: string, take = 3): Promise<string[]> => {
+  const normalizedExclude = normalizeWord(excludeWord);
+  const rows = await prisma.$queryRaw<Array<{ word: string }>>(Prisma.sql`
+    SELECT query AS word
+    FROM yandex_dictionary_cache
+    WHERE LOWER(lang) REGEXP '^en([_-].+)?$'
+      AND query REGEXP '[A-Za-z]'
+      AND LOWER(query) <> ${normalizedExclude}
+    ORDER BY RAND()
+    LIMIT 120
+  `);
+
+  const seen = new Set<string>([normalizedExclude]);
+  const out: string[] = [];
+  for (const row of rows) {
+    const candidate = normalizeText(row.word);
+    const key = normalizeWord(candidate);
+    if (!candidate || !key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(candidate);
+    if (out.length >= take) break;
+  }
+  return out;
+};
+
+const getFallbackPairsFromYandex = async (
+  excludeWordKey: string,
+  needed: number,
+): Promise<Array<{ word: string; translation: string; yandexCacheId: number | null }>> => {
+  const rows = await prisma.$queryRaw<
+    Array<{ yandexCacheId: number; word: string; response: unknown }>
+  >(Prisma.sql`
+    SELECT id AS yandexCacheId, query AS word, response
+    FROM yandex_dictionary_cache
+    WHERE LOWER(lang) REGEXP '^en([_-].+)?$'
+      AND query REGEXP '[A-Za-z]'
+      AND LOWER(query) <> ${excludeWordKey}
+    ORDER BY RAND()
+    LIMIT 120
+  `);
+
+  const out: Array<{ word: string; translation: string; yandexCacheId: number | null }> = [];
+  const seenWords = new Set<string>([excludeWordKey]);
+  const seenTranslations = new Set<string>();
+
+  for (const row of rows) {
+    const normalizedWord = normalizeWord(row.word);
+    if (!normalizedWord || seenWords.has(normalizedWord)) continue;
+
+    const response =
+      typeof row.response === 'string'
+        ? (JSON.parse(row.response || '{}') as YandexDictResponse)
+        : ((row.response ?? {}) as YandexDictResponse);
+    const entries = buildYandexEntries(normalizedWord, 'en', response);
+    const translation = normalizeText(entries[0]?.translations?.[0] || '');
+    const translationKey = normalizeOptionText(translation);
+    if (!translation || !translationKey || seenTranslations.has(translationKey)) continue;
+
+    seenWords.add(normalizedWord);
+    seenTranslations.add(translationKey);
+    out.push({
+      word: normalizeText(row.word),
+      translation,
+      yandexCacheId: Number(row.yandexCacheId),
+    });
+    if (out.length >= needed) break;
+  }
+  return out;
+};
+
+const buildMissingExercise = async (
+  sentence: string,
+  sentenceTranslation: string | null,
+  targetWord: string,
+  phraseAudioUrl: string | null,
+): Promise<MissingExercisePayload> => {
+  const rawTokens = sentence.split(/\s+/).map((x) => x.trim()).filter(Boolean);
+  const candidates = rawTokens
+    .map((raw, idx) => ({ idx, clean: cleanWordToken(raw) }))
+    .filter((item) => item.clean.length > 0 && /[A-Za-z]/.test(item.clean));
+
+  const picked = candidates.length
+    ? candidates[Math.floor(Math.random() * candidates.length)]
+    : { idx: 0, clean: targetWord };
+  const correctWord = normalizeText(picked.clean || targetWord);
+
+  const sentenceWithBlank = rawTokens
+    .map((token, idx) => (idx === picked.idx ? '_____' : token))
+    .join(' ');
+
+  const distractors = await getDistractorWords(correctWord, 3);
+  const options = shuffleArray([correctWord, ...distractors]).slice(0, 4);
+
+  return {
+    type: 'missing',
+    sentence,
+    sentenceWithBlank,
+    sentenceTranslation,
+    options,
+    correctWord,
+    targetWord,
+    phraseAudioUrl,
+  };
+};
+
+const buildAudioAssembleExercise = (
+  sentence: string,
+  sentenceTranslation: string | null,
+  targetWord: string,
+  phraseAudioUrl: string | null,
+): AudioAssembleExercisePayload => {
+  const targetTokens = buildSentenceTokens(sentence);
+  const assembleTokens = shuffleArray([...targetTokens]);
+  return {
+    type: 'audio_assemble',
+    sentence,
+    sentenceTranslation,
+    phraseAudioUrl,
+    assembleTokens,
+    targetTokens,
+    targetWord,
+  };
+};
+
+const buildMatchPairsExercise = async (
+  userId: string,
+  current: { wordKey: string; word: string; translation: string; yandexCacheId: number | null },
+): Promise<MatchPairsExercisePayload> => {
+  const base: Array<{ word: string; translation: string; yandexCacheId: number | null }> = [
+    {
+      word: normalizeText(current.word),
+      translation: normalizeText(current.translation),
+      yandexCacheId: current.yandexCacheId,
+    },
+  ];
+
+  const distractors = await prisma.$queryRaw<
+    Array<{ word: string; translation: string; yandexCacheId: number | null }>
+  >(Prisma.sql`
+    SELECT p.word AS word, p.translation AS translation, p.yandex_cache_id AS yandexCacheId
+    FROM word_training_progress p
+    LEFT JOIN exercise_excluded_words ex ON ex.word_id = p.yandex_cache_id
+    WHERE p.user_id = ${userId}
+      AND p.word_key <> ${current.wordKey}
+      AND p.word IS NOT NULL
+      AND TRIM(p.word) <> ''
+      AND p.translation IS NOT NULL
+      AND TRIM(p.translation) <> ''
+      AND ex.word_id IS NULL
+    ORDER BY RAND()
+    LIMIT 40
+  `);
+
+  const seenWords = new Set<string>([normalizeWord(current.word)]);
+  const seenTranslations = new Set<string>([normalizeOptionText(current.translation)]);
+
+  for (const row of distractors) {
+    const word = normalizeText(row.word);
+    const translation = normalizeText(row.translation);
+    const wk = normalizeWord(word);
+    const tk = normalizeOptionText(translation);
+    if (!word || !translation || !wk || !tk) continue;
+    if (seenWords.has(wk) || seenTranslations.has(tk)) continue;
+    seenWords.add(wk);
+    seenTranslations.add(tk);
+    base.push({ word, translation, yandexCacheId: row.yandexCacheId ? Number(row.yandexCacheId) : null });
+    if (base.length >= 4) break;
+  }
+
+  if (base.length < 4) {
+    const fallback = await getFallbackPairsFromYandex(normalizeWord(current.word), 4 - base.length);
+    for (const row of fallback) {
+      const wk = normalizeWord(row.word);
+      const tk = normalizeOptionText(row.translation);
+      if (!wk || !tk || seenWords.has(wk) || seenTranslations.has(tk)) continue;
+      seenWords.add(wk);
+      seenTranslations.add(tk);
+      base.push(row);
+      if (base.length >= 4) break;
+    }
+  }
+
+  const trimmed = base.slice(0, 4);
+  const pairs = await Promise.all(
+    trimmed.map(async (row) => ({
+      word: row.word,
+      translation: row.translation,
+      pronunciationAudioUrl: await getPronunciationAudioUrl(row.yandexCacheId, row.word),
+    })),
+  );
+
+  return {
+    type: 'match_pairs',
+    targetWord: current.word,
+    pairs,
+    shuffledTranslations: shuffleArray(pairs.map((x) => x.translation)),
+  };
+};
+
 const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) => {
   const itemId = Number(item.id);
   const position = await getQueuePosition(sessionId, itemId);
@@ -1095,8 +1344,12 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     };
   }
 
-  const reinforcementType = pickReinforcementType();
-  if (item.reinforcement_type !== 'assemble') {
+  let reinforcementType = pickReinforcementType();
+  if (!generatedPhrase && (reinforcementType === 'missing' || reinforcementType === 'audio_assemble')) {
+    reinforcementType = 'match_pairs';
+  }
+
+  if (item.reinforcement_type !== reinforcementType) {
     await prisma.$executeRaw(Prisma.sql`
       UPDATE word_training_session_items
       SET reinforcement_type = ${reinforcementType}
@@ -1107,12 +1360,29 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
   const reinforcementSentence = generatedPhrase?.phraseEn || context?.text || `${item.word} ${item.translation}`;
   const reinforcementSentenceTranslation = generatedPhrase?.phraseRu || item.translation;
   const reinforcementAudioUrl = generatedPhrase?.phraseAudioUrl || wordPronunciationAudioUrl;
-
-  const assembleTokens = reinforcementSentence
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0)
-    .slice(0, 10);
+  let reinforcement: MissingExercisePayload | AudioAssembleExercisePayload | MatchPairsExercisePayload;
+  if (reinforcementType === 'missing') {
+    reinforcement = await buildMissingExercise(
+      reinforcementSentence,
+      reinforcementSentenceTranslation,
+      item.word,
+      reinforcementAudioUrl,
+    );
+  } else if (reinforcementType === 'audio_assemble') {
+    reinforcement = buildAudioAssembleExercise(
+      reinforcementSentence,
+      reinforcementSentenceTranslation,
+      item.word,
+      reinforcementAudioUrl,
+    );
+  } else {
+    reinforcement = await buildMatchPairsExercise(userId, {
+      wordKey: item.word_key,
+      word: item.word,
+      translation: item.translation,
+      yandexCacheId: item.yandex_cache_id,
+    });
+  }
 
   return {
     mode: 'reinforcement' as const,
@@ -1127,13 +1397,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     queueTotal: position.total,
     context,
     pronunciationAudioUrl: reinforcementAudioUrl,
-    reinforcement: {
-      type: reinforcementType,
-      sentence: reinforcementSentence,
-      sentenceTranslation: reinforcementSentenceTranslation,
-      assembleTokens: assembleTokens.sort(() => Math.random() - 0.5),
-      targetWord: item.word,
-    },
+    reinforcement,
   };
 };
 

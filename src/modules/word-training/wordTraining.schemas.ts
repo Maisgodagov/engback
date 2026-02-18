@@ -11,7 +11,7 @@ export const submitRecognitionSchema = z.object({
 
 export const submitReinforcementSchema = z.object({
   itemId: z.number().int().positive(),
-  exerciseType: z.literal('assemble'),
+  exerciseType: z.enum(['missing', 'audio_assemble', 'match_pairs']),
   isCorrect: z.boolean(),
 });
 
