@@ -48,7 +48,7 @@ export const startSession = async (req: Request, res: Response) => {
       return;
     }
     const payload = startSessionSchema.parse(req.body ?? {});
-    const state = await wordTrainingService.startSession(userId, payload.targetWords);
+    const state = await wordTrainingService.startSession(userId, payload.targetWords, payload.preferences);
     res.status(201).json(state);
   } catch (error) {
     handleControllerError(res, error);

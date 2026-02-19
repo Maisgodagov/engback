@@ -1,7 +1,28 @@
 import { z } from 'zod';
 
 export const startSessionSchema = z.object({
-  targetWords: z.number().int().min(10).max(25).optional(),
+  targetWords: z.number().int().min(1).max(5).optional(),
+  preferences: z
+    .object({
+      cefrLevel: z.enum(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']).optional(),
+      maxUniqueWords: z.number().int().min(1).max(5).optional(),
+      maxMatchPairsPerSession: z.number().int().min(0).max(1).optional(),
+      prioritizeUserInteractions: z.boolean().optional(),
+      levelMix: z
+        .object({
+          currentLevelWeight: z.number().min(0).max(1).optional(),
+          lowerLevelWeight: z.number().min(0).max(1).optional(),
+          higherLevelWeight: z.number().min(0).max(1).optional(),
+        })
+        .optional(),
+      reinforcementMode: z
+        .object({
+          phraseExercisesPerWord: z.number().int().min(1).max(2).optional(),
+          retryMistakesAtEnd: z.boolean().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 
 export const submitRecognitionSchema = z.object({

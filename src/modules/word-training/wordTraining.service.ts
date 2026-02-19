@@ -166,9 +166,25 @@ type PreferredSnippetInput = {
   contextText?: string | null;
 };
 
-const SESSION_TARGET_DEFAULT = 20;
-const SESSION_TARGET_MIN = 10;
-const SESSION_TARGET_MAX = 25;
+type StartSessionPreferences = {
+  cefrLevel?: 'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2';
+  maxUniqueWords?: number;
+  maxMatchPairsPerSession?: number;
+  prioritizeUserInteractions?: boolean;
+  levelMix?: {
+    currentLevelWeight?: number;
+    lowerLevelWeight?: number;
+    higherLevelWeight?: number;
+  };
+  reinforcementMode?: {
+    phraseExercisesPerWord?: number;
+    retryMistakesAtEnd?: boolean;
+  };
+};
+
+const SESSION_TARGET_DEFAULT = 5;
+const SESSION_TARGET_MIN = 1;
+const SESSION_TARGET_MAX = 5;
 const SESSION_ENERGY_START = 100;
 const RECOGNITION_ENERGY_COST = 4;
 const REINFORCEMENT_ENERGY_COST = 3;
@@ -309,9 +325,12 @@ const xpForGrade = (grade: RecognitionGrade): number => {
   return 4;
 };
 
-const pickReinforcementType = (): ExerciseType => {
-  const variants: ExerciseType[] = ['missing', 'audio_assemble', 'match_pairs'];
-  return variants[Math.floor(Math.random() * variants.length)];
+const pickPhraseReinforcementType = (wordKey: string): ExerciseType => {
+  let hash = 0;
+  for (let i = 0; i < wordKey.length; i += 1) {
+    hash = (hash * 31 + wordKey.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash) % 2 === 0 ? 'missing' : 'audio_assemble';
 };
 
 const ensureWordTrainingTables = async () => {
@@ -711,7 +730,12 @@ const loadProgress = async (userId: string): Promise<ProgressRow[]> =>
       AND ex.word_id IS NULL
   `);
 
-const buildDailyQueue = (rows: ProgressRow[], requestedTarget: number, userLevel: string): {
+const buildDailyQueue = (
+  rows: ProgressRow[],
+  requestedTarget: number,
+  userLevel: string,
+  preferences?: StartSessionPreferences,
+): {
   queue: QueueDraftItem[];
   reviewCount: number;
   mistakeCount: number;
@@ -724,16 +748,24 @@ const buildDailyQueue = (rows: ProgressRow[], requestedTarget: number, userLevel
 
   const now = Date.now();
   const target = clamp(requestedTarget, SESSION_TARGET_MIN, SESSION_TARGET_MAX);
-  const newLimit = Math.min(7, Math.max(5, Math.floor(target * 0.28)));
-  const reviewTarget = Math.max(8, target - newLimit);
-  const mistakeTarget = Math.min(6, Math.max(3, Math.floor(target * 0.25)));
+  const newLimit = Math.max(1, Math.round(target * 0.3));
+  const reviewTarget = Math.max(1, target - newLimit);
+  const mistakeTarget = Math.max(1, Math.round(target * 0.2));
 
   const scored = rows.map((row) => {
     const cefrLevel = normalizeCefrLevel(row.cefr_level) ?? 'A1';
     const dueTs = row.due_at?.getTime() ?? 0;
     const overdueHours = dueTs > 0 && dueTs <= now ? Math.floor((now - dueTs) / 3_600_000) : 0;
     const accuracy = row.review_count > 0 ? row.correct_count / row.review_count : 0;
-    const mistakePressure = row.wrong_count * 3 + Math.round((1 - accuracy) * 10);
+    const interactionBoost =
+      preferences?.prioritizeUserInteractions === false
+        ? 0
+        : row.source_type === 'manual'
+        ? 5
+        : row.source_type === 'viewed'
+        ? 3
+        : 1;
+    const mistakePressure = row.wrong_count * 3 + Math.round((1 - accuracy) * 10) + interactionBoost;
     return {
       row,
       cefrLevel,
@@ -783,8 +815,12 @@ const buildDailyQueue = (rows: ProgressRow[], requestedTarget: number, userLevel
 
   const selected = new Set<string>();
   const queue: QueueDraftItem[] = [];
-  const lowerQuota = lowerLevel ? Math.max(1, Math.floor(target * 0.15)) : 0;
-  const higherQuota = higherLevel ? Math.max(1, Math.floor(target * 0.15)) : 0;
+  const lowerWeight = clamp(preferences?.levelMix?.lowerLevelWeight ?? 0.15, 0, 1);
+  const higherWeight = clamp(preferences?.levelMix?.higherLevelWeight ?? 0.15, 0, 1);
+  const currentWeight = clamp(preferences?.levelMix?.currentLevelWeight ?? 0.7, 0, 1);
+  const totalWeight = Math.max(0.0001, lowerWeight + higherWeight + currentWeight);
+  const lowerQuota = lowerLevel ? Math.max(1, Math.floor((target * lowerWeight) / totalWeight)) : 0;
+  const higherQuota = higherLevel ? Math.max(1, Math.floor((target * higherWeight) / totalWeight)) : 0;
   const currentQuota = Math.max(1, target - lowerQuota - higherQuota);
   const quotas = new Map<string, number>([
     [normalizedUserLevel, currentQuota],
@@ -1410,9 +1446,22 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     };
   }
 
-  let reinforcementType = pickReinforcementType();
-  if (!generatedPhrase && (reinforcementType === 'missing' || reinforcementType === 'audio_assemble')) {
+  const [matchPairsRow] = await prisma.$queryRaw<Array<{ countItems: bigint }>>(Prisma.sql`
+    SELECT COUNT(*) AS countItems
+    FROM word_training_session_items
+    WHERE session_id = ${sessionId}
+      AND reinforcement_type = 'match_pairs'
+      AND id <> ${item.id}
+  `);
+  const hasMatchPairsInSession = Number(matchPairsRow?.countItems ?? 0) > 0;
+
+  let reinforcementType: ExerciseType;
+  const shouldInsertSingleMatchPairs =
+    !hasMatchPairsInSession && position.position >= Math.max(2, Math.ceil(position.total * 0.6));
+  if (shouldInsertSingleMatchPairs) {
     reinforcementType = 'match_pairs';
+  } else {
+    reinforcementType = pickPhraseReinforcementType(item.word_key);
   }
 
   if (item.reinforcement_type !== reinforcementType) {
@@ -1507,6 +1556,15 @@ const buildSessionState = async (session: SessionRow) => {
   }
 
   const item = await getCurrentItem(fresh.id);
+  const [pendingPhase] = await prisma.$queryRaw<Array<{ pendingRetry: bigint; pendingRegular: bigint }>>(Prisma.sql`
+    SELECT
+      SUM(CASE WHEN state = 'pending' AND reason = 'retry' THEN 1 ELSE 0 END) AS pendingRetry,
+      SUM(CASE WHEN state = 'pending' AND reason <> 'retry' THEN 1 ELSE 0 END) AS pendingRegular
+    FROM word_training_session_items
+    WHERE session_id = ${fresh.id}
+  `);
+  const retryPhaseActive =
+    Number(pendingPhase?.pendingRetry ?? 0) > 0 && Number(pendingPhase?.pendingRegular ?? 0) === 0;
   return {
     session: {
       id: fresh.id,
@@ -1523,6 +1581,8 @@ const buildSessionState = async (session: SessionRow) => {
       completedAt: fresh.completed_at,
     },
     task: item ? await mapTask(fresh.user_id, fresh.id, item) : null,
+    retryPhase: retryPhaseActive,
+    retryPhaseTitle: retryPhaseActive ? 'Закрепляем ошибки' : null,
   };
 };
 
@@ -1600,7 +1660,11 @@ const loadOverview = async (userId: string) => {
   };
 };
 
-const startSession = async (userId: string, targetWords?: number) => {
+const startSession = async (
+  userId: string,
+  targetWords?: number,
+  preferences?: StartSessionPreferences,
+) => {
   await ensureWordTrainingTables();
 
   const existing = await getActiveSession(userId);
@@ -1625,7 +1689,13 @@ const startSession = async (userId: string, targetWords?: number) => {
     SESSION_TARGET_MIN,
     SESSION_TARGET_MAX,
   );
-  const queueBuild = buildDailyQueue(progressRows, requestedTarget, user?.level ?? 'A1');
+  const effectiveLevel = preferences?.cefrLevel ?? normalizeCefrLevel(user?.level) ?? 'A1';
+  const queueBuild = buildDailyQueue(progressRows, requestedTarget, effectiveLevel, preferences);
+  const maxUniqueWords = clamp(preferences?.maxUniqueWords ?? 5, 1, 5);
+  queueBuild.queue = queueBuild.queue.slice(0, maxUniqueWords);
+  queueBuild.reviewCount = queueBuild.queue.filter((it) => it.reason === 'review').length;
+  queueBuild.mistakeCount = queueBuild.queue.filter((it) => it.reason === 'mistake').length;
+  queueBuild.newCount = queueBuild.queue.filter((it) => it.reason === 'new').length;
   if (!queueBuild.queue.length) {
     throw Object.assign(new Error('Сегодня нет слов для тренировки. Возвращайтесь позже.'), {
       status: 400,
@@ -1744,9 +1814,7 @@ const submitRecognition = async (
     const srs = calculateSrsAfterGrade(progress, input.grade, now);
     const nextAttempts = item.attempt_count + 1;
     const shouldRetry = input.grade === 'again' && nextAttempts < MAX_RETRY_ATTEMPTS;
-    const needsReinforcement =
-      input.grade !== 'again' &&
-      (item.initial_stage >= 2 || item.initial_status === 'review' || item.initial_status === 'mastered');
+    const needsReinforcement = input.grade !== 'again';
 
     await tx.$executeRaw(Prisma.sql`
       UPDATE word_training_progress
