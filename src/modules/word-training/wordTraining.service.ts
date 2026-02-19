@@ -185,6 +185,7 @@ type StartSessionPreferences = {
 const SESSION_TARGET_DEFAULT = 5;
 const SESSION_TARGET_MIN = 1;
 const SESSION_TARGET_MAX = 5;
+const TOUCH_GOAL = 5;
 const SESSION_ENERGY_START = 100;
 const RECOGNITION_ENERGY_COST = 4;
 const REINFORCEMENT_ENERGY_COST = 3;
@@ -723,10 +724,13 @@ const loadProgress = async (userId: string): Promise<ProgressRow[]> =>
       ydc.cefr_level
     FROM word_training_progress p
     INNER JOIN yandex_dictionary_cache ydc ON ydc.id = p.yandex_cache_id
+    LEFT JOIN user_word_progress uwp
+      ON uwp.user_id = p.user_id AND uwp.word_id = p.yandex_cache_id
     LEFT JOIN exercise_excluded_words ex ON ex.word_id = p.yandex_cache_id
     WHERE p.user_id = ${userId}
       AND ydc.cefr_level IS NOT NULL
       AND TRIM(ydc.cefr_level) <> ''
+      AND COALESCE(uwp.status, 'new') NOT IN ('known', 'ignored')
       AND ex.word_id IS NULL
   `);
 
@@ -748,7 +752,7 @@ const buildDailyQueue = (
 
   const now = Date.now();
   const target = clamp(requestedTarget, SESSION_TARGET_MIN, SESSION_TARGET_MAX);
-  const newLimit = Math.max(1, Math.round(target * 0.3));
+  const newLimit = Math.max(1, Math.round(target * 0.6));
   const reviewTarget = Math.max(1, target - newLimit);
   const mistakeTarget = Math.max(1, Math.round(target * 0.2));
 
@@ -1849,6 +1853,32 @@ const submitRecognition = async (
       WHERE id = ${item.id}
     `);
 
+    if (item.yandex_cache_id) {
+      const isCorrectInt = input.grade === 'again' ? 0 : 1;
+      await tx.$executeRaw(Prisma.sql`
+        INSERT INTO user_word_progress (user_id, word_id, status, touches_total, touches_correct, streak, added_to_vocab)
+        VALUES (
+          ${userId},
+          ${item.yandex_cache_id},
+          CASE WHEN ${isCorrectInt} >= ${TOUCH_GOAL} THEN 'known' ELSE 'learning' END,
+          1,
+          ${isCorrectInt},
+          ${isCorrectInt},
+          0
+        )
+        ON DUPLICATE KEY UPDATE
+          touches_total = touches_total + 1,
+          touches_correct = touches_correct + ${isCorrectInt},
+          streak = CASE WHEN ${isCorrectInt} = 1 THEN streak + 1 ELSE 0 END,
+          status = CASE
+            WHEN status IN ('known', 'ignored') THEN status
+            WHEN touches_correct + ${isCorrectInt} >= ${TOUCH_GOAL} THEN 'known'
+            ELSE 'learning'
+          END,
+          updated_at = NOW(3)
+      `);
+    }
+
     if (shouldRetry) {
       const [maxOrderRow] = await tx.$queryRaw<Array<{ maxOrder: number | null }>>(Prisma.sql`
         SELECT MAX(queue_order) AS maxOrder
@@ -2008,6 +2038,32 @@ const submitReinforcement = async (
         state = 'completed'
       WHERE id = ${item.id}
     `);
+
+    if (item.yandex_cache_id) {
+      const isCorrectInt = input.isCorrect ? 1 : 0;
+      await tx.$executeRaw(Prisma.sql`
+        INSERT INTO user_word_progress (user_id, word_id, status, touches_total, touches_correct, streak, added_to_vocab)
+        VALUES (
+          ${userId},
+          ${item.yandex_cache_id},
+          CASE WHEN ${isCorrectInt} >= ${TOUCH_GOAL} THEN 'known' ELSE 'learning' END,
+          1,
+          ${isCorrectInt},
+          ${isCorrectInt},
+          0
+        )
+        ON DUPLICATE KEY UPDATE
+          touches_total = touches_total + 1,
+          touches_correct = touches_correct + ${isCorrectInt},
+          streak = CASE WHEN ${isCorrectInt} = 1 THEN streak + 1 ELSE 0 END,
+          status = CASE
+            WHEN status IN ('known', 'ignored') THEN status
+            WHEN touches_correct + ${isCorrectInt} >= ${TOUCH_GOAL} THEN 'known'
+            ELSE 'learning'
+          END,
+          updated_at = NOW(3)
+      `);
+    }
 
     if (!input.isCorrect && item.attempt_count < MAX_RETRY_ATTEMPTS) {
       const [maxOrderRow] = await tx.$queryRaw<Array<{ maxOrder: number | null }>>(Prisma.sql`
