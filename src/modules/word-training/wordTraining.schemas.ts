@@ -39,6 +39,7 @@ export const submitReinforcementSchema = z.object({
 export const getExamplesSchema = z.object({
   word: z.string().trim().min(1).max(120),
   limit: z.coerce.number().int().min(1).max(30).optional(),
+  paddingSeconds: z.coerce.number().int().min(0).max(10).optional(),
 });
 
 export const finishSessionSchema = z.object({

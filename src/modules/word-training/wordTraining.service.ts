@@ -986,6 +986,7 @@ const getExamplesByWord = async (
   word: string,
   limit = 3,
   excludeContentId?: number | null,
+  paddingSeconds = 2,
 ): Promise<WordExample[]> => {
   const normalizedWord = normalizeWord(word);
   if (!normalizedWord) return [];
@@ -993,7 +994,7 @@ const getExamplesByWord = async (
   const result = await videoLearningService.searchPhrase(
     normalizedWord,
     Math.max(1, limit),
-    1,
+    clamp(Math.floor(paddingSeconds), 0, 10),
     undefined,
     Math.max(10, limit * 4),
     undefined,
@@ -2413,9 +2414,14 @@ export const wordTrainingService = {
   submitRecognition,
   submitReinforcement,
   finishSession,
-  getExamplesByWord: async (word: string, limit = 3) => {
+  getExamplesByWord: async (
+    word: string,
+    limit = 3,
+    excludeContentId?: number | null,
+    paddingSeconds = 2,
+  ) => {
     await ensureWordTrainingTables();
-    return getExamplesByWord(word, limit);
+    return getExamplesByWord(word, limit, excludeContentId, paddingSeconds);
   },
   listModerationWords,
   listGeneratedPhrases,
