@@ -446,13 +446,15 @@ const searchCache = new LRUCache<string, { snippets: PhraseSnippet[]; snippetCap
 
 const buildSearchCacheKey = (params: {
   phrase: string;
-  paddingSeconds: number;
+  paddingBeforeSeconds: number;
+  paddingAfterSeconds: number;
   snippetCap: number;
   sampleSize?: number;
 }) =>
   [
     params.phrase.trim().toLowerCase(),
-    params.paddingSeconds,
+    params.paddingBeforeSeconds,
+    params.paddingAfterSeconds,
     params.snippetCap,
     params.sampleSize ?? "auto",
   ].join("|");
@@ -2328,7 +2330,8 @@ const buildSnippetsFromRecord = (
   record: ChunkSearchRecord,
   normalizedTokens: string[],
   phrase: string,
-  snippetPadding: number
+  snippetPaddingBefore: number,
+  snippetPaddingAfter: number
 ): PhraseSnippet[] => {
   if (!record.videoUrl) return [];
   const wordChunks = parseChunkArray(record.transcript_word_chunks);
@@ -2346,15 +2349,18 @@ const buildSnippetsFromRecord = (
 
     const startTimestamp = matchedWordChunks[0].timestamp[0];
     const endTimestamp = matchedWordChunks[matchedWordChunks.length - 1].timestamp[1];
-    const startSeconds = Math.max(0, startTimestamp - snippetPadding);
-    const rawEnd = endTimestamp + snippetPadding;
+    const startSeconds = Math.max(0, startTimestamp - snippetPaddingBefore);
+    const rawEnd = endTimestamp + snippetPaddingAfter;
     const duration =
       typeof record.durationSeconds === "number" &&
       Number.isFinite(record.durationSeconds)
         ? record.durationSeconds
         : null;
     const endSeconds = duration !== null ? Math.min(rawEnd, duration) : rawEnd;
-    const minimumDelta = snippetPadding > 0 ? snippetPadding : 0.5;
+    const minimumDelta =
+      Math.max(snippetPaddingBefore, snippetPaddingAfter) > 0
+        ? Math.max(snippetPaddingBefore, snippetPaddingAfter)
+        : 0.5;
     const safeEnd = endSeconds > startSeconds ? endSeconds : startSeconds + minimumDelta;
 
     const matchedText = formatChunksText(matchedWordChunks);
@@ -2603,7 +2609,8 @@ const runChunkSearch = async (
   candidateIds: number[],
   normalizedTokens: string[],
   phrase: string,
-  snippetPadding: number,
+  snippetPaddingBefore: number,
+  snippetPaddingAfter: number,
   snippetCap: number
 ): Promise<{ snippets: PhraseSnippet[]; authorMap: Map<number, string | null> }> => {
   if (!candidateIds.length) {
@@ -2638,7 +2645,8 @@ const runChunkSearch = async (
         record,
         normalizedTokens,
         phrase,
-        snippetPadding
+        snippetPaddingBefore,
+        snippetPaddingAfter
       );
       for (const snippet of recordSnippets) {
         if (snippetIds.has(snippet.id ?? "")) continue;
@@ -2660,7 +2668,9 @@ const runChunkSearch = async (
     paddingSeconds?: number,
     cursor?: number,
     maxSnippets?: number,
-    sampleSize?: number
+    sampleSize?: number,
+    paddingBeforeSeconds?: number,
+    paddingAfterSeconds?: number
   ): Promise<PhraseSearchResult> => {
     const startedAt = Date.now();
     const trimmed = (phrase ?? "").trim();
@@ -2696,10 +2706,17 @@ const runChunkSearch = async (
 
     const snippetCap = Math.max(pageSize, sanitizeSnippetCap(maxSnippets));
     const cursorOffset = Math.min(sanitizeCursorOffset(cursor), snippetCap);
-    const snippetPadding = sanitizePaddingSeconds(paddingSeconds);
+    const fallbackPadding = sanitizePaddingSeconds(paddingSeconds);
+    const snippetPaddingBefore = sanitizePaddingSeconds(
+      typeof paddingBeforeSeconds === "number" ? paddingBeforeSeconds : fallbackPadding
+    );
+    const snippetPaddingAfter = sanitizePaddingSeconds(
+      typeof paddingAfterSeconds === "number" ? paddingAfterSeconds : fallbackPadding
+    );
     const cacheKey = buildSearchCacheKey({
       phrase: trimmed,
-      paddingSeconds: snippetPadding,
+      paddingBeforeSeconds: snippetPaddingBefore,
+      paddingAfterSeconds: snippetPaddingAfter,
       snippetCap,
       sampleSize,
     });
@@ -2754,7 +2771,8 @@ const runChunkSearch = async (
       randomizedCandidates,
       normalizedTokens,
       trimmed,
-      snippetPadding,
+      snippetPaddingBefore,
+      snippetPaddingAfter,
       snippetCap
     );
     const chunkMs = Date.now() - chunkStart;

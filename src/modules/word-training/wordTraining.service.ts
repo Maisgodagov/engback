@@ -230,6 +230,23 @@ const shuffleArray = <T>(items: T[]): T[] => {
   return next;
 };
 
+const shuffleTranslationsWithDerangement = (
+  sourcePairs: Array<{ word: string; translation: string }>,
+): string[] => {
+  const original = sourcePairs.map((pair) => pair.translation);
+  if (original.length <= 1) return original;
+
+  // Try random shuffles first, but avoid index-by-index match with original order.
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const shuffled = shuffleArray(original);
+    const unchanged = shuffled.every((value, index) => normalizeOptionText(value) === normalizeOptionText(original[index]));
+    if (!unchanged) return shuffled;
+  }
+
+  // Deterministic fallback: rotate by one to guarantee at least one mismatch.
+  return [...original.slice(1), original[0]];
+};
+
 const addMinutes = (base: Date, minutes: number): Date => new Date(base.getTime() + minutes * 60_000);
 const addDays = (base: Date, days: number): Date => new Date(base.getTime() + days * 86_400_000);
 
@@ -991,6 +1008,8 @@ const getExamplesByWord = async (
   limit = 3,
   excludeContentId?: number | null,
   paddingSeconds = 2,
+  paddingBeforeSeconds?: number,
+  paddingAfterSeconds?: number,
 ): Promise<WordExample[]> => {
   const normalizedWord = normalizeWord(word);
   if (!normalizedWord) return [];
@@ -1002,6 +1021,8 @@ const getExamplesByWord = async (
     undefined,
     Math.max(10, limit * 4),
     undefined,
+    typeof paddingBeforeSeconds === 'number' ? clamp(Math.floor(paddingBeforeSeconds), 0, 10) : undefined,
+    typeof paddingAfterSeconds === 'number' ? clamp(Math.floor(paddingAfterSeconds), 0, 10) : undefined,
   );
 
   const mapped = result.items.map((item) => ({
@@ -1122,6 +1143,55 @@ const getPronunciationAudioUrl = async (
   `);
 
   return fallback?.audioUrl?.trim() || null;
+};
+
+const getAlternativeTranslations = async (
+  yandexCacheId: number | null,
+  word: string,
+  primaryTranslation: string,
+): Promise<string[]> => {
+  const normalizedPrimary = normalizeOptionText(primaryTranslation);
+  let responseJson: unknown = null;
+  let queryWord = word;
+
+  if (yandexCacheId) {
+    const [row] = await prisma.$queryRaw<Array<{ responseJson: unknown; query: string }>>(Prisma.sql`
+      SELECT response AS responseJson, query
+      FROM yandex_dictionary_cache
+      WHERE id = ${yandexCacheId}
+      LIMIT 1
+    `);
+    responseJson = row?.responseJson ?? null;
+    queryWord = row?.query?.trim() || word;
+  } else {
+    const normalizedWord = normalizeWord(word);
+    if (!normalizedWord) return [];
+    const [row] = await prisma.$queryRaw<Array<{ responseJson: unknown; query: string }>>(Prisma.sql`
+      SELECT response AS responseJson, query
+      FROM yandex_dictionary_cache
+      WHERE LOWER(query) = ${normalizedWord}
+        AND LOWER(lang) REGEXP '^en([_-].+)?$'
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `);
+    responseJson = row?.responseJson ?? null;
+    queryWord = row?.query?.trim() || word;
+  }
+
+  if (!responseJson) return [];
+  const entries = buildYandexEntries(queryWord, 'en', responseJson as YandexDictResponse);
+  const candidates = entries[0]?.translations ?? [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const trimmed = normalizeText(candidate);
+    const key = normalizeOptionText(trimmed);
+    if (!trimmed || !key || key === normalizedPrimary || seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+    if (out.length >= 5) break;
+  }
+  return out;
 };
 
 const getGeneratedPhraseForWord = async (
@@ -1383,7 +1453,7 @@ const buildMatchPairsExercise = async (
     type: 'match_pairs',
     targetWord: current.word,
     pairs,
-    shuffledTranslations: shuffleArray(pairs.map((x) => x.translation)),
+    shuffledTranslations: shuffleTranslationsWithDerangement(pairs),
   };
 };
 
@@ -1392,6 +1462,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
   const position = await getQueuePosition(sessionId, itemId);
   let context = null as null | WordExample;
   const wordPronunciationAudioUrl = await getPronunciationAudioUrl(item.yandex_cache_id, item.word);
+  const otherTranslations = await getAlternativeTranslations(item.yandex_cache_id, item.word, item.translation);
   const generatedPhrase = await getGeneratedPhraseForWord(item.yandex_cache_id, item.word);
 
   if (item.context_content_id && item.context_text) {
@@ -1443,6 +1514,8 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
       queueTotal: position.total,
       context,
       pronunciationAudioUrl: wordPronunciationAudioUrl,
+      isNewWord: item.initial_status === 'new',
+      otherTranslations,
       recognitionOptions,
       showReinforcementAfter:
         item.initial_stage >= 2 ||
@@ -1534,7 +1607,31 @@ const buildSessionState = async (session: SessionRow) => {
       FROM word_training_sessions
       WHERE user_id = ${fresh.user_id}
         AND DATE(started_at) = ${today}
-        AND status = 'completed'
+      AND status = 'completed'
+    `);
+    const completedWords = await prisma.$queryRaw<
+      Array<{
+        wordKey: string;
+        word: string;
+        translation: string;
+        cefrLevel: string | null;
+      }>
+    >(Prisma.sql`
+      SELECT
+        si.word_key AS wordKey,
+        MAX(si.word) AS word,
+        MAX(si.translation) AS translation,
+        MAX(ydc.cefr_level) AS cefrLevel
+      FROM word_training_session_items si
+      LEFT JOIN yandex_dictionary_cache ydc ON ydc.id = si.yandex_cache_id
+      WHERE si.session_id = ${fresh.id}
+        AND (
+          si.reinforcement_correct = 1
+          OR (si.recognition_grade IS NOT NULL AND si.recognition_grade <> 'again')
+        )
+      GROUP BY si.word_key
+      ORDER BY MAX(si.queue_order) ASC
+      LIMIT 20
     `);
 
     return {
@@ -1556,6 +1653,12 @@ const buildSessionState = async (session: SessionRow) => {
       summary: {
         totalXpToday: Number(dailyRow?.totalXp ?? 0),
         totalWordsToday: Number(dailyRow?.totalWords ?? 0),
+        completedWords: completedWords.map((row) => ({
+          wordKey: row.wordKey,
+          word: row.word,
+          translation: row.translation,
+          cefrLevel: normalizeCefrLevel(row.cefrLevel),
+        })),
       },
     };
   }
@@ -2475,9 +2578,18 @@ export const wordTrainingService = {
     limit = 3,
     excludeContentId?: number | null,
     paddingSeconds = 2,
+    paddingBeforeSeconds?: number,
+    paddingAfterSeconds?: number,
   ) => {
     await ensureWordTrainingTables();
-    return getExamplesByWord(word, limit, excludeContentId, paddingSeconds);
+    return getExamplesByWord(
+      word,
+      limit,
+      excludeContentId,
+      paddingSeconds,
+      paddingBeforeSeconds,
+      paddingAfterSeconds,
+    );
   },
   listModerationWords,
   listGeneratedPhrases,

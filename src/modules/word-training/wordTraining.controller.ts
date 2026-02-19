@@ -142,8 +142,15 @@ export const getExamples = async (req: Request, res: Response) => {
       res.status(400).json({ message: 'Invalid request', issues: parseResult.error.issues });
       return;
     }
-    const { word, limit, paddingSeconds } = parseResult.data;
-    const items = await wordTrainingService.getExamplesByWord(word, limit ?? 3, undefined, paddingSeconds ?? 2);
+    const { word, limit, paddingSeconds, paddingBeforeSeconds, paddingAfterSeconds } = parseResult.data;
+    const items = await wordTrainingService.getExamplesByWord(
+      word,
+      limit ?? 3,
+      undefined,
+      paddingSeconds ?? 2,
+      paddingBeforeSeconds,
+      paddingAfterSeconds,
+    );
     res.json({ items });
   } catch (error) {
     handleControllerError(res, error);

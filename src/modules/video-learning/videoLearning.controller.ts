@@ -86,6 +86,8 @@ export const searchPhrase = async (req: Request, res: Response) => {
       phrase: req.query.phrase,
       limit: req.query.limit,
       paddingSeconds: req.query.paddingSeconds,
+      paddingBeforeSeconds: req.query.paddingBeforeSeconds,
+      paddingAfterSeconds: req.query.paddingAfterSeconds,
     cursor: req.query.cursor,
     maxSnippets: req.query.maxSnippets,
     sampleSize: req.query.sampleSize,
@@ -98,6 +100,8 @@ export const searchPhrase = async (req: Request, res: Response) => {
     query.cursor,
     query.maxSnippets,
     query.sampleSize,
+    query.paddingBeforeSeconds,
+    query.paddingAfterSeconds,
   );
     res.json(result);
   } catch (error: any) {
