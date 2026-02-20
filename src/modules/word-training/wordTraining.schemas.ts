@@ -17,7 +17,7 @@ export const startSessionSchema = z.object({
         .optional(),
       reinforcementMode: z
         .object({
-          phraseExercisesPerWord: z.number().int().min(1).max(2).optional(),
+          phraseExercisesPerWord: z.number().int().min(1).max(3).optional(),
           retryMistakesAtEnd: z.boolean().optional(),
         })
         .optional(),

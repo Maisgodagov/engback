@@ -58,6 +58,7 @@ type SessionRow = {
   user_id: string;
   status: SessionStatus;
   target_words: number;
+  phrase_exercises_per_word: number;
   energy_start: number;
   energy_left: number;
   review_planned: number;
@@ -185,6 +186,8 @@ type StartSessionPreferences = {
 const SESSION_TARGET_DEFAULT = 5;
 const SESSION_TARGET_MIN = 1;
 const SESSION_TARGET_MAX = 5;
+const PHRASE_EXERCISES_PER_WORD_DEFAULT = 3;
+const PHRASE_EXERCISES_PER_WORD_MAX = 3;
 const TOUCH_GOAL = 3;
 const SESSION_ENERGY_START = 100;
 const RECOGNITION_ENERGY_COST = 4;
@@ -343,11 +346,12 @@ const xpForGrade = (grade: RecognitionGrade): number => {
   return 4;
 };
 
-const pickPhraseReinforcementType = (wordKey: string): ExerciseType => {
+const pickPhraseReinforcementType = (wordKey: string, seed = 0): ExerciseType => {
   let hash = 0;
   for (let i = 0; i < wordKey.length; i += 1) {
     hash = (hash * 31 + wordKey.charCodeAt(i)) | 0;
   }
+  hash = (hash * 31 + seed) | 0;
   return Math.abs(hash) % 2 === 0 ? 'missing' : 'audio_assemble';
 };
 
@@ -395,6 +399,7 @@ const ensureWordTrainingTables = async () => {
       user_id VARCHAR(191) NOT NULL,
       status VARCHAR(16) NOT NULL DEFAULT 'active',
       target_words INT NOT NULL DEFAULT 20,
+      phrase_exercises_per_word INT NOT NULL DEFAULT 2,
       energy_start INT NOT NULL DEFAULT 100,
       energy_left INT NOT NULL DEFAULT 100,
       review_planned INT NOT NULL DEFAULT 0,
@@ -408,6 +413,11 @@ const ensureWordTrainingTables = async () => {
       KEY idx_word_training_sessions_user_status (user_id, status, started_at),
       KEY idx_word_training_sessions_user_date (user_id, started_at)
     )
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE word_training_sessions
+    ADD COLUMN IF NOT EXISTS phrase_exercises_per_word INT NOT NULL DEFAULT 2
   `);
 
   await prisma.$executeRawUnsafe(`
@@ -1145,6 +1155,35 @@ const getPronunciationAudioUrl = async (
   return fallback?.audioUrl?.trim() || null;
 };
 
+const getWordCefrLevel = async (
+  yandexCacheId: number | null,
+  word: string,
+): Promise<string | null> => {
+  if (yandexCacheId) {
+    const [row] = await prisma.$queryRaw<Array<{ cefrLevel: string | null }>>(Prisma.sql`
+      SELECT cefr_level AS cefrLevel
+      FROM yandex_dictionary_cache
+      WHERE id = ${yandexCacheId}
+      LIMIT 1
+    `);
+    const normalized = normalizeCefrLevel(row?.cefrLevel ?? null);
+    if (normalized) return normalized;
+  }
+
+  const normalizedWord = normalizeWord(word);
+  if (!normalizedWord) return null;
+  const [fallback] = await prisma.$queryRaw<Array<{ cefrLevel: string | null }>>(Prisma.sql`
+    SELECT cefr_level AS cefrLevel
+    FROM yandex_dictionary_cache
+    WHERE LOWER(query) = ${normalizedWord}
+      AND LOWER(lang) REGEXP '^en([_-].+)?$'
+      AND cefr_level IS NOT NULL
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `);
+  return normalizeCefrLevel(fallback?.cefrLevel ?? null);
+};
+
 const getAlternativeTranslations = async (
   yandexCacheId: number | null,
   word: string,
@@ -1462,6 +1501,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
   const position = await getQueuePosition(sessionId, itemId);
   let context = null as null | WordExample;
   const wordPronunciationAudioUrl = await getPronunciationAudioUrl(item.yandex_cache_id, item.word);
+  const wordCefrLevel = await getWordCefrLevel(item.yandex_cache_id, item.word);
   const otherTranslations = await getAlternativeTranslations(item.yandex_cache_id, item.word, item.translation);
   const generatedPhrase = await getGeneratedPhraseForWord(item.yandex_cache_id, item.word);
 
@@ -1514,6 +1554,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
       queueTotal: position.total,
       context,
       pronunciationAudioUrl: wordPronunciationAudioUrl,
+      cefrLevel: wordCefrLevel,
       isNewWord: item.initial_status === 'new',
       otherTranslations,
       recognitionOptions,
@@ -1539,7 +1580,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
   if (shouldInsertSingleMatchPairs) {
     reinforcementType = 'match_pairs';
   } else {
-    reinforcementType = pickPhraseReinforcementType(item.word_key);
+    reinforcementType = pickPhraseReinforcementType(item.word_key, item.id + item.queue_order + item.attempt_count);
   }
 
   if (item.reinforcement_type !== reinforcementType) {
@@ -1590,6 +1631,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     queueTotal: position.total,
     context,
     pronunciationAudioUrl: reinforcementAudioUrl,
+    cefrLevel: wordCefrLevel,
     reinforcement,
   };
 };
@@ -1801,9 +1843,15 @@ const startSession = async (
   const queueBuild = buildDailyQueue(progressRows, requestedTarget, effectiveLevel, preferences);
   const maxUniqueWords = clamp(preferences?.maxUniqueWords ?? 5, 1, 5);
   queueBuild.queue = queueBuild.queue.slice(0, maxUniqueWords);
+  queueBuild.queue = shuffleArray(queueBuild.queue);
   queueBuild.reviewCount = queueBuild.queue.filter((it) => it.reason === 'review').length;
   queueBuild.mistakeCount = queueBuild.queue.filter((it) => it.reason === 'mistake').length;
   queueBuild.newCount = queueBuild.queue.filter((it) => it.reason === 'new').length;
+  const phraseExercisesPerWord = clamp(
+    Math.floor(preferences?.reinforcementMode?.phraseExercisesPerWord ?? PHRASE_EXERCISES_PER_WORD_DEFAULT),
+    1,
+    PHRASE_EXERCISES_PER_WORD_MAX,
+  );
   if (!queueBuild.queue.length) {
     throw Object.assign(new Error('Сегодня нет слов для тренировки. Возвращайтесь позже.'), {
       status: 400,
@@ -1818,6 +1866,7 @@ const startSession = async (
         user_id,
         status,
         target_words,
+        phrase_exercises_per_word,
         energy_start,
         energy_left,
         review_planned,
@@ -1829,6 +1878,7 @@ const startSession = async (
         ${userId},
         'active',
         ${queueBuild.queue.length},
+        ${phraseExercisesPerWord},
         ${SESSION_ENERGY_START},
         ${SESSION_ENERGY_START},
         ${queueBuild.reviewCount},
@@ -1922,6 +1972,11 @@ const submitRecognition = async (
     const srs = calculateSrsAfterGrade(progress, input.grade, now);
     const nextAttempts = item.attempt_count + 1;
     const shouldRetry = input.grade === 'again' && nextAttempts < MAX_RETRY_ATTEMPTS;
+    const phraseRounds = clamp(
+      Math.floor(session.phrase_exercises_per_word || PHRASE_EXERCISES_PER_WORD_DEFAULT),
+      1,
+      PHRASE_EXERCISES_PER_WORD_MAX,
+    );
     const needsReinforcement = input.grade !== 'again';
 
     await tx.$executeRaw(Prisma.sql`
@@ -1951,8 +2006,8 @@ const submitRecognition = async (
         recognition_grade = ${input.grade},
         recognition_at = ${now},
         attempt_count = ${nextAttempts},
-        phase = ${needsReinforcement ? 'reinforcement' : 'done'},
-        state = ${needsReinforcement ? 'pending' : 'completed'}
+        phase = 'done',
+        state = 'completed'
       WHERE id = ${item.id}
     `);
 
@@ -2025,13 +2080,54 @@ const submitRecognition = async (
       `);
     }
 
-    const itemCompleted = !needsReinforcement;
-    const wordsCompletedDelta = itemCompleted ? 1 : 0;
+    if (needsReinforcement) {
+      const [maxOrderRow] = await tx.$queryRaw<Array<{ maxOrder: number | null }>>(Prisma.sql`
+        SELECT MAX(queue_order) AS maxOrder
+        FROM word_training_session_items
+        WHERE session_id = ${sessionId}
+      `);
+      const baseOrder = Number(maxOrderRow?.maxOrder ?? 0);
+      for (let round = 0; round < phraseRounds; round += 1) {
+        await tx.$executeRaw(Prisma.sql`
+          INSERT INTO word_training_session_items (
+            session_id,
+            queue_order,
+            word_key,
+            word,
+            translation,
+            source_type,
+            yandex_cache_id,
+            reason,
+            priority_score,
+            initial_status,
+            initial_stage,
+            phase,
+            state,
+            attempt_count
+          )
+          VALUES (
+            ${sessionId},
+            ${baseOrder + round + 1},
+            ${item.word_key},
+            ${item.word},
+            ${item.translation},
+            ${item.source_type},
+            ${item.yandex_cache_id},
+            ${item.reason},
+            ${item.priority_score + 1 + round},
+            ${srs.nextStatus},
+            ${srs.nextStage},
+            'reinforcement',
+            'pending',
+            ${round}
+          )
+        `);
+      }
+    }
     await tx.$executeRaw(Prisma.sql`
       UPDATE word_training_sessions
       SET
         energy_left = GREATEST(0, energy_left - ${RECOGNITION_ENERGY_COST}),
-        words_completed = words_completed + ${wordsCompletedDelta},
         xp_earned = xp_earned + ${xpForGrade(input.grade)}
       WHERE id = ${sessionId}
     `);
@@ -2142,6 +2238,16 @@ const submitReinforcement = async (
       WHERE id = ${item.id}
     `);
 
+    const [completedForWordRow] = await tx.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+      SELECT COUNT(*) AS total
+      FROM word_training_session_items
+      WHERE session_id = ${sessionId}
+        AND word_key = ${item.word_key}
+        AND state = 'completed'
+        AND reinforcement_at IS NOT NULL
+    `);
+    const wordsCompletedDelta = Number(completedForWordRow?.total ?? 0) === 1 ? 1 : 0;
+
     if (item.yandex_cache_id) {
       const isCorrectInt = input.isCorrect ? 1 : 0;
       await tx.$executeRaw(Prisma.sql`
@@ -2214,7 +2320,7 @@ const submitReinforcement = async (
     await tx.$executeRaw(Prisma.sql`
       UPDATE word_training_sessions
       SET
-        words_completed = words_completed + 1,
+        words_completed = words_completed + ${wordsCompletedDelta},
         energy_left = GREATEST(0, energy_left - ${REINFORCEMENT_ENERGY_COST}),
         xp_earned = xp_earned + ${input.isCorrect ? 2 : 0}
       WHERE id = ${sessionId}

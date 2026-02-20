@@ -1,12 +1,11 @@
 import type { UserProfileDto } from '../../shared/types';
 import { UserRole } from '../../shared/types';
 
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../shared/prisma/prismaClient';
 
 // OPTIMIZATION: Cache flags to avoid checking schema on every request
 let xpColumnChecked = false;
-let streakTableChecked = false;
-let streakHistoryChecked = false;
 
 const listUsers = async (limit?: number, offset?: number): Promise<UserProfileDto[]> => {
   // OPTIMIZATION: Check xpColumn only once at startup
@@ -38,30 +37,43 @@ const listUsers = async (limit?: number, offset?: number): Promise<UserProfileDt
   }));
 };
 
-const ensureStreakTable = async () => {
-  if (streakTableChecked) return;
-  await prisma.$executeRawUnsafe(
-    `CREATE TABLE IF NOT EXISTS user_streaks (
-      userId VARCHAR(191) PRIMARY KEY,
-      lastSeenAt DATETIME(3) NOT NULL,
-      updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
-    )`,
-  );
-  streakTableChecked = true;
+const dayKeyUtc = (value: Date): number =>
+  Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
+
+const dayDiffUtc = (left: Date, right: Date): number =>
+  Math.floor((dayKeyUtc(left) - dayKeyUtc(right)) / 86_400_000);
+
+const loadTrainingCompletionDates = async (userId: string): Promise<Date[]> => {
+  const rows = await prisma.$queryRaw<Array<{ completedDate: Date }>>(Prisma.sql`
+    SELECT DISTINCT DATE(completed_at) AS completedDate
+    FROM word_training_sessions
+    WHERE user_id = ${userId}
+      AND status = 'completed'
+      AND completed_at IS NOT NULL
+      AND words_completed > 0
+    ORDER BY completedDate DESC
+  `);
+  return rows
+    .map((row) => new Date(row.completedDate))
+    .filter((date) => Number.isFinite(date.getTime()));
 };
 
-const ensureStreakHistoryTable = async () => {
-  if (streakHistoryChecked) return;
-  await prisma.$executeRawUnsafe(
-    `CREATE TABLE IF NOT EXISTS user_streak_history (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      userId VARCHAR(191) NOT NULL,
-      seenDate DATE NOT NULL,
-      createdAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-      UNIQUE KEY uniq_user_date (userId, seenDate)
-    )`,
-  );
-  streakHistoryChecked = true;
+const calculateTrainingStreak = (datesDesc: Date[], now = new Date()): number => {
+  if (!datesDesc.length) return 0;
+  const latest = datesDesc[0];
+  const latestDiff = dayDiffUtc(now, latest);
+  if (!Number.isFinite(latestDiff) || latestDiff > 1) return 0;
+
+  let streak = 1;
+  let previous = latest;
+  for (let i = 1; i < datesDesc.length; i += 1) {
+    const current = datesDesc[i];
+    const diff = dayDiffUtc(previous, current);
+    if (diff !== 1) break;
+    streak += 1;
+    previous = current;
+  }
+  return streak;
 };
 
 const ensureXpColumn = async () => {
@@ -77,51 +89,8 @@ const ensureXpColumn = async () => {
 };
 
 const refreshStreak = async (userId: string): Promise<{ streakDays: number }> => {
-  await ensureStreakTable();
-  await ensureStreakHistoryTable();
-  const now = new Date();
-
-  const [streakRow] = (await prisma.$queryRawUnsafe<any[]>(
-    `SELECT lastSeenAt FROM user_streaks WHERE userId = ? LIMIT 1`,
-    userId,
-  )) as Array<{ lastSeenAt: Date }>;
-
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { streakDays: true } });
-  let current = user?.streakDays ?? 0;
-  let next = 1;
-
-  if (!streakRow) {
-    next = 1;
-  } else {
-    const lastSeenAt = new Date(streakRow.lastSeenAt);
-    const dayKey = (value: Date) =>
-      Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
-    const dayDiff = Math.floor((dayKey(now) - dayKey(lastSeenAt)) / 86400000);
-
-    if (!Number.isFinite(dayDiff) || dayDiff > 1) {
-      next = 1;
-    } else if (dayDiff === 1) {
-      next = Math.max(1, current) + 1;
-    } else {
-      next = Math.max(1, current);
-    }
-  }
-
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO user_streaks (userId, lastSeenAt, updatedAt)
-     VALUES (?, ?, CURRENT_TIMESTAMP(3))
-     ON DUPLICATE KEY UPDATE lastSeenAt = VALUES(lastSeenAt), updatedAt = CURRENT_TIMESTAMP(3)`,
-    userId,
-    now,
-  );
-
-  await prisma.$executeRawUnsafe(
-    `INSERT IGNORE INTO user_streak_history (userId, seenDate)
-     VALUES (?, DATE(?))`,
-    userId,
-    now,
-  );
-
+  const completionDates = await loadTrainingCompletionDates(userId);
+  const next = calculateTrainingStreak(completionDates, new Date());
   await prisma.user.update({ where: { id: userId }, data: { streakDays: next } });
   return { streakDays: next };
 };
@@ -130,12 +99,8 @@ export const usersService = {
   listUsers,
   refreshStreak,
   getStreakHistory: async (userId: string): Promise<{ dates: string[] }> => {
-    await ensureStreakHistoryTable();
-    const rows = (await prisma.$queryRawUnsafe<any[]>(
-      `SELECT seenDate FROM user_streak_history WHERE userId = ? ORDER BY seenDate DESC`,
-      userId,
-    )) as Array<{ seenDate: Date }>;
-    const dates = rows.map((row) => row.seenDate.toISOString().slice(0, 10));
+    const completionDates = await loadTrainingCompletionDates(userId);
+    const dates = completionDates.map((date) => date.toISOString().slice(0, 10));
     return { dates };
   },
   addXp: async (userId: string, amount: number): Promise<{ xpPoints: number }> => {
