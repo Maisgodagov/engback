@@ -96,6 +96,9 @@ type SessionItemRow = {
   context_start_seconds: number | null;
   context_end_seconds: number | null;
   context_text: string | null;
+  reinforcement_sentence_en: string | null;
+  reinforcement_sentence_ru: string | null;
+  reinforcement_phrase_audio_url: string | null;
 };
 
 type QueueDraftItem = {
@@ -455,6 +458,9 @@ const ensureWordTrainingTables = async () => {
       context_start_seconds FLOAT NULL,
       context_end_seconds FLOAT NULL,
       context_text TEXT NULL,
+      reinforcement_sentence_en VARCHAR(255) NULL,
+      reinforcement_sentence_ru VARCHAR(255) NULL,
+      reinforcement_phrase_audio_url VARCHAR(255) NULL,
       created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
       UNIQUE KEY uniq_word_training_session_item_order (session_id, queue_order),
@@ -462,6 +468,48 @@ const ensureWordTrainingTables = async () => {
       KEY idx_word_training_session_items_word (session_id, word_key)
     )
   `);
+
+  const [sentenceEnCol] = await prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+    SELECT COUNT(*) AS total
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'word_training_session_items'
+      AND column_name = 'reinforcement_sentence_en'
+  `);
+  if (Number(sentenceEnCol?.total ?? 0) === 0) {
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE word_training_session_items
+      ADD COLUMN reinforcement_sentence_en VARCHAR(255) NULL
+    `);
+  }
+
+  const [sentenceRuCol] = await prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+    SELECT COUNT(*) AS total
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'word_training_session_items'
+      AND column_name = 'reinforcement_sentence_ru'
+  `);
+  if (Number(sentenceRuCol?.total ?? 0) === 0) {
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE word_training_session_items
+      ADD COLUMN reinforcement_sentence_ru VARCHAR(255) NULL
+    `);
+  }
+
+  const [sentenceAudioCol] = await prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+    SELECT COUNT(*) AS total
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'word_training_session_items'
+      AND column_name = 'reinforcement_phrase_audio_url'
+  `);
+  if (Number(sentenceAudioCol?.total ?? 0) === 0) {
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE word_training_session_items
+      ADD COLUMN reinforcement_phrase_audio_url VARCHAR(255) NULL
+    `);
+  }
 
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS word_training_events (
@@ -1245,7 +1293,15 @@ const getAlternativeTranslations = async (
 const getGeneratedPhraseForWord = async (
   yandexCacheId: number | null,
   word: string,
+  options?: {
+    excludePhraseEns?: string[];
+  },
 ): Promise<GeneratedPhrase | null> => {
+  const excludePhraseEns = (options?.excludePhraseEns ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const hasExclude = excludePhraseEns.length > 0;
+
   if (yandexCacheId) {
     const [row] = await prisma.$queryRaw<
       Array<{ phraseEn: string; phraseRu: string | null; phraseAudioUrl: string | null }>
@@ -1253,6 +1309,7 @@ const getGeneratedPhraseForWord = async (
       SELECT phrase_en AS phraseEn, phrase_ru AS phraseRu, phrase_audio_url AS phraseAudioUrl
       FROM word_training_generated_phrases
       WHERE yandex_cache_id = ${yandexCacheId}
+        ${hasExclude ? Prisma.sql`AND phrase_en NOT IN (${Prisma.join(excludePhraseEns)})` : Prisma.empty}
       ORDER BY RAND()
       LIMIT 1
     `);
@@ -1274,6 +1331,7 @@ const getGeneratedPhraseForWord = async (
     SELECT phrase_en AS phraseEn, phrase_ru AS phraseRu, phrase_audio_url AS phraseAudioUrl
     FROM word_training_generated_phrases
     WHERE LOWER(word) = ${normalizedWord}
+      ${hasExclude ? Prisma.sql`AND phrase_en NOT IN (${Prisma.join(excludePhraseEns)})` : Prisma.empty}
     ORDER BY RAND()
     LIMIT 1
   `);
@@ -1523,7 +1581,6 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
   const wordPronunciationAudioUrl = await getPronunciationAudioUrl(item.yandex_cache_id, item.word);
   const wordCefrLevel = await getWordCefrLevel(item.yandex_cache_id, item.word);
   const otherTranslations = await getAlternativeTranslations(item.yandex_cache_id, item.word, item.translation);
-  const generatedPhrase = await getGeneratedPhraseForWord(item.yandex_cache_id, item.word);
 
   if (item.context_content_id && item.context_text) {
     const [contentRow] = await prisma.$queryRaw<
@@ -1613,6 +1670,46 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
       SET reinforcement_type = ${reinforcementType}
       WHERE id = ${item.id}
     `);
+  }
+
+  let generatedPhrase: GeneratedPhrase | null = null;
+  if (item.reinforcement_sentence_en?.trim()) {
+    generatedPhrase = {
+      phraseEn: item.reinforcement_sentence_en.trim(),
+      phraseRu: item.reinforcement_sentence_ru?.trim() || null,
+      phraseAudioUrl: item.reinforcement_phrase_audio_url?.trim() || null,
+    };
+  } else {
+    const excludePhraseEns =
+      item.reason === 'retry'
+        ? []
+        : (
+            await prisma.$queryRaw<Array<{ phraseEn: string }>>(Prisma.sql`
+              SELECT reinforcement_sentence_en AS phraseEn
+              FROM word_training_session_items
+              WHERE session_id = ${sessionId}
+                AND word_key = ${item.word_key}
+                AND id <> ${item.id}
+                AND reinforcement_sentence_en IS NOT NULL
+                AND TRIM(reinforcement_sentence_en) <> ''
+                AND reason <> 'retry'
+            `)
+          ).map((row) => row.phraseEn);
+
+    generatedPhrase = await getGeneratedPhraseForWord(item.yandex_cache_id, item.word, {
+      excludePhraseEns,
+    });
+
+    if (generatedPhrase) {
+      await prisma.$executeRaw(Prisma.sql`
+        UPDATE word_training_session_items
+        SET
+          reinforcement_sentence_en = ${generatedPhrase.phraseEn},
+          reinforcement_sentence_ru = ${generatedPhrase.phraseRu},
+          reinforcement_phrase_audio_url = ${generatedPhrase.phraseAudioUrl}
+        WHERE id = ${item.id}
+      `);
+    }
   }
 
   const reinforcementSentence = generatedPhrase?.phraseEn || context?.text || `${item.word} ${item.translation}`;
