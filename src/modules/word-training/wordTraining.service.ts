@@ -415,10 +415,19 @@ const ensureWordTrainingTables = async () => {
     )
   `);
 
-  await prisma.$executeRawUnsafe(`
-    ALTER TABLE word_training_sessions
-    ADD COLUMN IF NOT EXISTS phrase_exercises_per_word INT NOT NULL DEFAULT 2
+  const [phraseExercisesColumn] = await prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+    SELECT COUNT(*) AS total
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'word_training_sessions'
+      AND column_name = 'phrase_exercises_per_word'
   `);
+  if (Number(phraseExercisesColumn?.total ?? 0) === 0) {
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE word_training_sessions
+      ADD COLUMN phrase_exercises_per_word INT NOT NULL DEFAULT 2
+    `);
+  }
 
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS word_training_session_items (
@@ -1399,14 +1408,25 @@ const buildMissingExercise = async (
   };
 };
 
-const buildAudioAssembleExercise = (
+const buildAudioAssembleExercise = async (
   sentence: string,
   sentenceTranslation: string | null,
   targetWord: string,
   phraseAudioUrl: string | null,
-): AudioAssembleExercisePayload => {
+): Promise<AudioAssembleExercisePayload> => {
   const targetTokens = buildSentenceTokens(sentence);
-  const assembleTokens = shuffleArray([...targetTokens]);
+  const targetKeys = new Set(targetTokens.map((token) => normalizeWord(token)));
+  const distractorTake = targetTokens.length >= 5 ? 2 : 1;
+  const rawDistractors = await getDistractorWords(targetWord, distractorTake + 3);
+  const distractors: string[] = [];
+  for (const candidate of rawDistractors) {
+    const key = normalizeWord(candidate);
+    if (!key || targetKeys.has(key)) continue;
+    distractors.push(candidate);
+    if (distractors.length >= distractorTake) break;
+  }
+
+  const assembleTokens = shuffleArray([...targetTokens, ...distractors]);
   return {
     type: 'audio_assemble',
     sentence,
@@ -1603,7 +1623,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
       reinforcementAudioUrl,
     );
   } else if (reinforcementType === 'audio_assemble') {
-    reinforcement = buildAudioAssembleExercise(
+    reinforcement = await buildAudioAssembleExercise(
       reinforcementSentence,
       reinforcementSentenceTranslation,
       item.word,
