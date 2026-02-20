@@ -1600,7 +1600,11 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
   if (shouldInsertSingleMatchPairs) {
     reinforcementType = 'match_pairs';
   } else {
-    reinforcementType = pickPhraseReinforcementType(item.word_key, item.id + item.queue_order + item.attempt_count);
+    const itemIdSeed = Number(item.id ?? 0);
+    reinforcementType = pickPhraseReinforcementType(
+      item.word_key,
+      itemIdSeed + item.queue_order + item.attempt_count,
+    );
   }
 
   if (item.reinforcement_type !== reinforcementType) {
