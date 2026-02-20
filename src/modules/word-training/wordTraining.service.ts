@@ -2696,6 +2696,64 @@ const saveModerationSelections = async (
   return { yandexCacheId, selectedCount: dedup.size };
 };
 
+const getWordMasteryMap = async (userId: string) => {
+  await ensureWordTrainingTables();
+
+  const rows = await prisma.$queryRaw<
+    Array<{
+      id: number;
+      word: string;
+      cefrLevel: string;
+      mastery: 'known' | 'learning' | 'new';
+    }>
+  >(Prisma.sql`
+    SELECT
+      ydc.id AS id,
+      ydc.query AS word,
+      ydc.cefr_level AS cefrLevel,
+      CASE
+        WHEN uwp.status IN ('known', 'ignored') THEN 'known'
+        WHEN uwp.status IN ('learning', 'viewed') THEN 'learning'
+        ELSE 'new'
+      END AS mastery
+    FROM yandex_dictionary_cache ydc
+    LEFT JOIN user_word_progress uwp
+      ON uwp.word_id = ydc.id
+      AND uwp.user_id = ${userId}
+    WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
+      AND ydc.cefr_level IN ('A1', 'A2', 'B1', 'B2', 'C1', 'C2')
+    ORDER BY FIELD(ydc.cefr_level, 'A1', 'A2', 'B1', 'B2', 'C1', 'C2'), ydc.query ASC, ydc.id ASC
+  `);
+
+  const byStatus = {
+    known: 0,
+    learning: 0,
+    new: 0,
+  };
+  const byLevel: Record<string, { total: number; known: number; learning: number; new: number }> = {};
+
+  for (const row of rows) {
+    byStatus[row.mastery] += 1;
+    if (!byLevel[row.cefrLevel]) {
+      byLevel[row.cefrLevel] = { total: 0, known: 0, learning: 0, new: 0 };
+    }
+    byLevel[row.cefrLevel].total += 1;
+    byLevel[row.cefrLevel][row.mastery] += 1;
+  }
+
+  return {
+    total: rows.length,
+    byStatus,
+    byLevel,
+    items: rows.map((row) => ({
+      id: row.id,
+      word: row.word,
+      cefrLevel: row.cefrLevel,
+      mastery: row.mastery,
+    })),
+  };
+};
+
 export const wordTrainingService = {
   loadOverview,
   startSession,
@@ -2725,4 +2783,5 @@ export const wordTrainingService = {
   listGeneratedPhrases,
   getModerationSnippets,
   saveModerationSelections,
+  getWordMasteryMap,
 };

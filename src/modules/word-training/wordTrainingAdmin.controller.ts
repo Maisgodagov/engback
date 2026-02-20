@@ -72,3 +72,17 @@ export const saveModerationSelections = async (req: Request, res: Response) => {
     handleError(res, error);
   }
 };
+
+export const getWordMasteryMap = async (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) {
+      res.status(401).json({ message: 'Missing user identifier' });
+      return;
+    }
+    const result = await wordTrainingService.getWordMasteryMap(userId);
+    res.json(result);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
