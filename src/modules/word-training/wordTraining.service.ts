@@ -2796,18 +2796,53 @@ const saveModerationSelections = async (
 const getWordMasteryMap = async (userId: string) => {
   await ensureWordTrainingTables();
 
+  const cefrBlockColumnRows = await prisma.$queryRaw<Array<{ cnt: bigint | number }>>(Prisma.sql`
+    SELECT COUNT(*) AS cnt
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'yandex_dictionary_cache'
+      AND column_name = 'cefr_block'
+  `);
+  const hasCefrBlockColumn = Number(cefrBlockColumnRows[0]?.cnt ?? 0) > 0;
+
   const rows = await prisma.$queryRaw<
     Array<{
       id: number;
       word: string;
       cefrLevel: string;
+      cefrBlock: string | null;
       mastery: 'known' | 'learning' | 'new';
     }>
-  >(Prisma.sql`
+  >(
+    hasCefrBlockColumn
+      ? Prisma.sql`
     SELECT
       ydc.id AS id,
       ydc.query AS word,
       ydc.cefr_level AS cefrLevel,
+      ydc.cefr_block AS cefrBlock,
+      CASE
+        WHEN uwp.status IN ('known', 'ignored') THEN 'known'
+        WHEN uwp.status IN ('learning', 'viewed') THEN 'learning'
+        ELSE 'new'
+      END AS mastery
+    FROM yandex_dictionary_cache ydc
+    LEFT JOIN user_word_progress uwp
+      ON uwp.word_id = ydc.id
+      AND uwp.user_id = ${userId}
+    WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
+      AND ydc.cefr_level IN ('A1', 'A2', 'B1', 'B2', 'C1', 'C2')
+    ORDER BY FIELD(ydc.cefr_level, 'A1', 'A2', 'B1', 'B2', 'C1', 'C2'),
+             ydc.cefr_block ASC,
+             ydc.query ASC,
+             ydc.id ASC
+  `
+      : Prisma.sql`
+    SELECT
+      ydc.id AS id,
+      ydc.query AS word,
+      ydc.cefr_level AS cefrLevel,
+      NULL AS cefrBlock,
       CASE
         WHEN uwp.status IN ('known', 'ignored') THEN 'known'
         WHEN uwp.status IN ('learning', 'viewed') THEN 'learning'
@@ -2820,7 +2855,8 @@ const getWordMasteryMap = async (userId: string) => {
     WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
       AND ydc.cefr_level IN ('A1', 'A2', 'B1', 'B2', 'C1', 'C2')
     ORDER BY FIELD(ydc.cefr_level, 'A1', 'A2', 'B1', 'B2', 'C1', 'C2'), ydc.query ASC, ydc.id ASC
-  `);
+  `,
+  );
 
   const byStatus = {
     known: 0,
@@ -2828,6 +2864,7 @@ const getWordMasteryMap = async (userId: string) => {
     new: 0,
   };
   const byLevel: Record<string, { total: number; known: number; learning: number; new: number }> = {};
+  const byBlock: Record<string, { total: number; known: number; learning: number; new: number }> = {};
 
   for (const row of rows) {
     byStatus[row.mastery] += 1;
@@ -2836,16 +2873,25 @@ const getWordMasteryMap = async (userId: string) => {
     }
     byLevel[row.cefrLevel].total += 1;
     byLevel[row.cefrLevel][row.mastery] += 1;
+
+    const blockKey = row.cefrBlock || `${row.cefrLevel}_0`;
+    if (!byBlock[blockKey]) {
+      byBlock[blockKey] = { total: 0, known: 0, learning: 0, new: 0 };
+    }
+    byBlock[blockKey].total += 1;
+    byBlock[blockKey][row.mastery] += 1;
   }
 
   return {
     total: rows.length,
     byStatus,
     byLevel,
+    byBlock,
     items: rows.map((row) => ({
       id: row.id,
       word: row.word,
       cefrLevel: row.cefrLevel,
+      cefrBlock: row.cefrBlock,
       mastery: row.mastery,
     })),
   };
