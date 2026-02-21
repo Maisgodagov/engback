@@ -197,6 +197,14 @@ type IntroQueueItem = {
   otherTranslations: string[];
 };
 
+type YandexCacheMeta = {
+  id?: number;
+  query: string;
+  responseJson: unknown;
+  pronunciationAudioUrl: string | null;
+  cefrLevel: string | null;
+};
+
 type SessionFlowStageKey = 'intro' | 'recognition' | 'matching' | 'deep_work' | 'retry' | 'result';
 
 type SessionFlowStage = {
@@ -1532,128 +1540,12 @@ const getRecognitionOptions = async (
   return shuffleArray([correct, ...distractors]).slice(0, 4);
 };
 
-const getIntroQueue = async (sessionId: string): Promise<IntroQueueItem[]> => {
-  const rows = await prisma.$queryRaw<
-    Array<{ wordKey: string; word: string; translation: string; yandexCacheId: number | null }>
-  >(Prisma.sql`
-    SELECT
-      i.word_key AS wordKey,
-      i.word AS word,
-      i.translation AS translation,
-      i.yandex_cache_id AS yandexCacheId
-    FROM word_training_session_items i
-    WHERE i.session_id = ${sessionId}
-      AND i.phase = 'recognition'
-      AND i.state = 'pending'
-    GROUP BY i.word_key, i.word, i.translation, i.yandex_cache_id
-    ORDER BY MIN(i.queue_order) ASC
-  `);
-
-  return Promise.all(
-    rows.map(async (row) => ({
-      wordKey: row.wordKey,
-      word: row.word,
-      translation: row.translation,
-      pronunciationAudioUrl: await getPronunciationAudioUrl(row.yandexCacheId, row.word),
-      cefrLevel: await getWordCefrLevel(row.yandexCacheId, row.word),
-      otherTranslations: await getAlternativeTranslations(row.yandexCacheId, row.word, row.translation),
-    })),
-  );
-};
-
-const getPronunciationAudioUrl = async (
-  yandexCacheId: number | null,
-  word: string,
-): Promise<string | null> => {
-  if (yandexCacheId) {
-    const [row] = await prisma.$queryRaw<Array<{ audioUrl: string | null }>>(Prisma.sql`
-      SELECT pronunciation_audio_url AS audioUrl
-      FROM yandex_dictionary_cache
-      WHERE id = ${yandexCacheId}
-      LIMIT 1
-    `);
-    if (row?.audioUrl && row.audioUrl.trim()) return row.audioUrl.trim();
-  }
-
-  const normalizedWord = normalizeWord(word);
-  if (!normalizedWord) return null;
-
-  const [fallback] = await prisma.$queryRaw<Array<{ audioUrl: string | null }>>(Prisma.sql`
-    SELECT pronunciation_audio_url AS audioUrl
-    FROM yandex_dictionary_cache
-    WHERE LOWER(query) = ${normalizedWord}
-      AND LOWER(lang) REGEXP '^en([_-].+)?$'
-      AND pronunciation_audio_url IS NOT NULL
-      AND TRIM(pronunciation_audio_url) <> ''
-    ORDER BY updated_at DESC
-    LIMIT 1
-  `);
-
-  return fallback?.audioUrl?.trim() || null;
-};
-
-const getWordCefrLevel = async (
-  yandexCacheId: number | null,
-  word: string,
-): Promise<string | null> => {
-  if (yandexCacheId) {
-    const [row] = await prisma.$queryRaw<Array<{ cefrLevel: string | null }>>(Prisma.sql`
-      SELECT cefr_level AS cefrLevel
-      FROM yandex_dictionary_cache
-      WHERE id = ${yandexCacheId}
-      LIMIT 1
-    `);
-    const normalized = normalizeCefrLevel(row?.cefrLevel ?? null);
-    if (normalized) return normalized;
-  }
-
-  const normalizedWord = normalizeWord(word);
-  if (!normalizedWord) return null;
-  const [fallback] = await prisma.$queryRaw<Array<{ cefrLevel: string | null }>>(Prisma.sql`
-    SELECT cefr_level AS cefrLevel
-    FROM yandex_dictionary_cache
-    WHERE LOWER(query) = ${normalizedWord}
-      AND LOWER(lang) REGEXP '^en([_-].+)?$'
-      AND cefr_level IS NOT NULL
-    ORDER BY updated_at DESC
-    LIMIT 1
-  `);
-  return normalizeCefrLevel(fallback?.cefrLevel ?? null);
-};
-
-const getAlternativeTranslations = async (
-  yandexCacheId: number | null,
-  word: string,
+const extractAlternativeTranslationsFromResponse = (
+  queryWord: string,
+  responseJson: unknown,
   primaryTranslation: string,
-): Promise<string[]> => {
+): string[] => {
   const normalizedPrimary = normalizeOptionText(primaryTranslation);
-  let responseJson: unknown = null;
-  let queryWord = word;
-
-  if (yandexCacheId) {
-    const [row] = await prisma.$queryRaw<Array<{ responseJson: unknown; query: string }>>(Prisma.sql`
-      SELECT response AS responseJson, query
-      FROM yandex_dictionary_cache
-      WHERE id = ${yandexCacheId}
-      LIMIT 1
-    `);
-    responseJson = row?.responseJson ?? null;
-    queryWord = row?.query?.trim() || word;
-  } else {
-    const normalizedWord = normalizeWord(word);
-    if (!normalizedWord) return [];
-    const [row] = await prisma.$queryRaw<Array<{ responseJson: unknown; query: string }>>(Prisma.sql`
-      SELECT response AS responseJson, query
-      FROM yandex_dictionary_cache
-      WHERE LOWER(query) = ${normalizedWord}
-        AND LOWER(lang) REGEXP '^en([_-].+)?$'
-      ORDER BY updated_at DESC
-      LIMIT 1
-    `);
-    responseJson = row?.responseJson ?? null;
-    queryWord = row?.query?.trim() || word;
-  }
-
   if (!responseJson) return [];
   const entries = buildYandexEntries(queryWord, 'en', responseJson as YandexDictResponse);
   const candidates = entries[0]?.translations ?? [];
@@ -1668,6 +1560,177 @@ const getAlternativeTranslations = async (
     if (out.length >= 5) break;
   }
   return out;
+};
+
+const getYandexCacheMetaById = async (yandexCacheId: number): Promise<YandexCacheMeta | null> => {
+  const [row] = await prisma.$queryRaw<
+    Array<{
+      id: number;
+      query: string;
+      responseJson: unknown;
+      pronunciationAudioUrl: string | null;
+      cefrLevel: string | null;
+    }>
+  >(Prisma.sql`
+    SELECT
+      id,
+      query,
+      response AS responseJson,
+      pronunciation_audio_url AS pronunciationAudioUrl,
+      cefr_level AS cefrLevel
+    FROM yandex_dictionary_cache
+    WHERE id = ${yandexCacheId}
+    LIMIT 1
+  `);
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    query: row.query?.trim() || '',
+    responseJson: row.responseJson ?? null,
+    pronunciationAudioUrl: row.pronunciationAudioUrl?.trim() || null,
+    cefrLevel: normalizeCefrLevel(row.cefrLevel ?? null),
+  };
+};
+
+const getYandexCacheMetaByWord = async (word: string): Promise<YandexCacheMeta | null> => {
+  const normalizedWord = normalizeWord(word);
+  if (!normalizedWord) return null;
+  const [row] = await prisma.$queryRaw<
+    Array<{
+      id: number;
+      query: string;
+      responseJson: unknown;
+      pronunciationAudioUrl: string | null;
+      cefrLevel: string | null;
+    }>
+  >(Prisma.sql`
+    SELECT
+      id,
+      query,
+      response AS responseJson,
+      pronunciation_audio_url AS pronunciationAudioUrl,
+      cefr_level AS cefrLevel
+    FROM yandex_dictionary_cache
+    WHERE LOWER(query) = ${normalizedWord}
+      AND LOWER(lang) REGEXP '^en([_-].+)?$'
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `);
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    query: row.query?.trim() || '',
+    responseJson: row.responseJson ?? null,
+    pronunciationAudioUrl: row.pronunciationAudioUrl?.trim() || null,
+    cefrLevel: normalizeCefrLevel(row.cefrLevel ?? null),
+  };
+};
+
+const getIntroQueue = async (sessionId: string): Promise<IntroQueueItem[]> => {
+  const rows = await prisma.$queryRaw<
+    Array<{
+      wordKey: string;
+      word: string;
+      translation: string;
+      yandexCacheId: number | null;
+      query: string | null;
+      responseJson: unknown;
+      pronunciationAudioUrl: string | null;
+      cefrLevel: string | null;
+    }>
+  >(Prisma.sql`
+    SELECT
+      si.word_key AS wordKey,
+      si.word AS word,
+      si.translation AS translation,
+      si.yandex_cache_id AS yandexCacheId,
+      ydc.query AS query,
+      ydc.response AS responseJson,
+      ydc.pronunciation_audio_url AS pronunciationAudioUrl,
+      ydc.cefr_level AS cefrLevel
+    FROM word_training_session_items si
+    INNER JOIN (
+      SELECT word_key AS wordKey, MIN(queue_order) AS minQueueOrder
+      FROM word_training_session_items
+      WHERE session_id = ${sessionId}
+        AND phase = 'recognition'
+        AND state = 'pending'
+      GROUP BY word_key
+    ) q
+      ON q.wordKey = si.word_key
+      AND q.minQueueOrder = si.queue_order
+      AND si.session_id = ${sessionId}
+      AND si.phase = 'recognition'
+      AND si.state = 'pending'
+    LEFT JOIN yandex_dictionary_cache ydc ON ydc.id = si.yandex_cache_id
+    ORDER BY si.queue_order ASC
+  `);
+
+  return rows.map((row) => {
+    const queryWord = row.query?.trim() || row.word;
+    return {
+      wordKey: row.wordKey,
+      word: row.word,
+      translation: row.translation,
+      pronunciationAudioUrl: row.pronunciationAudioUrl?.trim() || null,
+      cefrLevel: normalizeCefrLevel(row.cefrLevel ?? null),
+      otherTranslations: extractAlternativeTranslationsFromResponse(
+        queryWord,
+        row.responseJson,
+        row.translation,
+      ),
+    };
+  });
+};
+
+const getPronunciationAudioUrl = async (
+  yandexCacheId: number | null,
+  word: string,
+): Promise<string | null> => {
+  if (yandexCacheId) {
+    const metaById = await getYandexCacheMetaById(yandexCacheId);
+    if (metaById?.pronunciationAudioUrl) return metaById.pronunciationAudioUrl;
+  }
+
+  const metaByWord = await getYandexCacheMetaByWord(word);
+  return metaByWord?.pronunciationAudioUrl || null;
+};
+
+const getWordCefrLevel = async (
+  yandexCacheId: number | null,
+  word: string,
+): Promise<string | null> => {
+  if (yandexCacheId) {
+    const metaById = await getYandexCacheMetaById(yandexCacheId);
+    if (metaById?.cefrLevel) return metaById.cefrLevel;
+  }
+
+  const metaByWord = await getYandexCacheMetaByWord(word);
+  return metaByWord?.cefrLevel ?? null;
+};
+
+const getAlternativeTranslations = async (
+  yandexCacheId: number | null,
+  word: string,
+  primaryTranslation: string,
+): Promise<string[]> => {
+  if (yandexCacheId) {
+    const metaById = await getYandexCacheMetaById(yandexCacheId);
+    if (metaById?.responseJson) {
+      return extractAlternativeTranslationsFromResponse(
+        metaById.query || word,
+        metaById.responseJson,
+        primaryTranslation,
+      );
+    }
+  }
+  const metaByWord = await getYandexCacheMetaByWord(word);
+  if (!metaByWord?.responseJson) return [];
+  return extractAlternativeTranslationsFromResponse(
+    metaByWord.query || word,
+    metaByWord.responseJson,
+    primaryTranslation,
+  );
 };
 
 const getGeneratedPhraseForWord = async (
@@ -1953,11 +2016,11 @@ const buildMatchPairsExercise = async (
     seenWords.add(wk);
     seenTranslations.add(tk);
     base.push({ word, translation, yandexCacheId: row.yandexCacheId ? Number(row.yandexCacheId) : null });
-    if (base.length >= 4) break;
+    if (base.length >= 5) break;
   }
 
-  if (base.length < 4) {
-    const fallback = await getFallbackPairsFromYandex(normalizeWord(current.word), 4 - base.length);
+  if (base.length < 5) {
+    const fallback = await getFallbackPairsFromYandex(normalizeWord(current.word), 5 - base.length);
     for (const row of fallback) {
       const wk = normalizeWord(row.word);
       const tk = normalizeOptionText(row.translation);
@@ -1965,18 +2028,31 @@ const buildMatchPairsExercise = async (
       seenWords.add(wk);
       seenTranslations.add(tk);
       base.push(row);
-      if (base.length >= 4) break;
+      if (base.length >= 5) break;
     }
   }
 
   const trimmed = base.slice(0, 5);
-  const pairs = await Promise.all(
-    trimmed.map(async (row) => ({
-      word: row.word,
-      translation: row.translation,
-      pronunciationAudioUrl: await getPronunciationAudioUrl(row.yandexCacheId, row.word),
-    })),
+  const cacheIds = Array.from(
+    new Set(trimmed.map((row) => Number(row.yandexCacheId ?? 0)).filter((id) => Number.isFinite(id) && id > 0)),
   );
+  const audioById = new Map<number, string>();
+  if (cacheIds.length) {
+    const rows = await prisma.$queryRaw<Array<{ id: number; audioUrl: string | null }>>(Prisma.sql`
+      SELECT id, pronunciation_audio_url AS audioUrl
+      FROM yandex_dictionary_cache
+      WHERE id IN (${Prisma.join(cacheIds)})
+    `);
+    rows.forEach((row) => {
+      if (row.audioUrl?.trim()) audioById.set(Number(row.id), row.audioUrl.trim());
+    });
+  }
+  const pairs = trimmed.map((row) => ({
+    word: row.word,
+    translation: row.translation,
+    pronunciationAudioUrl:
+      (row.yandexCacheId ? audioById.get(Number(row.yandexCacheId)) : null) || null,
+  }));
 
   return {
     type: 'match_pairs',
@@ -1990,9 +2066,17 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
   const itemId = Number(item.id);
   const position = await getQueuePosition(sessionId, itemId);
   let context = null as null | WordExample;
-  const wordPronunciationAudioUrl = await getPronunciationAudioUrl(item.yandex_cache_id, item.word);
-  const wordCefrLevel = await getWordCefrLevel(item.yandex_cache_id, item.word);
-  const otherTranslations = await getAlternativeTranslations(item.yandex_cache_id, item.word, item.translation);
+  const cacheMeta = item.yandex_cache_id ? await getYandexCacheMetaById(item.yandex_cache_id) : null;
+  const wordPronunciationAudioUrl =
+    cacheMeta?.pronunciationAudioUrl || (await getPronunciationAudioUrl(null, item.word));
+  const wordCefrLevel = cacheMeta?.cefrLevel || (await getWordCefrLevel(null, item.word));
+  const otherTranslations = cacheMeta?.responseJson
+    ? extractAlternativeTranslationsFromResponse(
+        cacheMeta.query || item.word,
+        cacheMeta.responseJson,
+        item.translation,
+      )
+    : await getAlternativeTranslations(null, item.word, item.translation);
 
   if (item.context_content_id && item.context_text) {
     const [contentRow] = await prisma.$queryRaw<
@@ -2446,10 +2530,19 @@ const loadOverview = async (userId: string) => {
     levelRingProgress: {
       completedBlocks: blockState.completedInLevel,
       totalBlocks: blockState.levelBlocks.length,
-      percent:
-        blockState.levelBlocks.length > 0
-          ? Math.round((blockState.completedInLevel / blockState.levelBlocks.length) * 100)
-          : 0,
+      percent: (() => {
+        if (blockState.levelBlocks.length <= 0) return 0;
+        const currentBlockFraction =
+          currentBlockCompletion.totalWords > 0
+            ? Math.max(
+                0,
+                Math.min(1, currentBlockCompletion.knownWords / currentBlockCompletion.totalWords),
+              )
+            : 0;
+        return Math.round(
+          ((blockState.completedInLevel + currentBlockFraction) / blockState.levelBlocks.length) * 100,
+        );
+      })(),
     },
     currentBlockProgress: {
       knownWords: currentBlockCompletion.knownWords,
