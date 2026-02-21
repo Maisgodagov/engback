@@ -881,8 +881,10 @@ const syncProgressFromSources = async (userId: string): Promise<void> => {
   }
 };
 
-const loadProgress = async (userId: string, currentBlock?: string | null): Promise<ProgressRow[]> =>
-  prisma.$queryRaw<ProgressRow[]>(Prisma.sql`
+const loadProgress = async (userId: string, currentBlock?: string | null): Promise<ProgressRow[]> => {
+  const normalizedBlock = normalizeBlockKey(currentBlock);
+  const levelFallback = normalizedBlock ? normalizeCefrLevel(normalizedBlock.split('_')[0]) : null;
+  return prisma.$queryRaw<ProgressRow[]>(Prisma.sql`
     SELECT
       p.id,
       p.user_id,
@@ -920,10 +922,18 @@ const loadProgress = async (userId: string, currentBlock?: string | null): Promi
     WHERE p.user_id = ${userId}
       AND ydc.cefr_level IS NOT NULL
       AND TRIM(ydc.cefr_level) <> ''
-      ${currentBlock ? Prisma.sql`AND ydc.cefr_block = ${currentBlock}` : Prisma.empty}
+      ${
+        normalizedBlock
+          ? Prisma.sql`AND (
+              ydc.cefr_block = ${normalizedBlock}
+              OR (ydc.cefr_block IS NULL AND ${levelFallback} IS NOT NULL AND ydc.cefr_level = ${levelFallback})
+            )`
+          : Prisma.empty
+      }
       AND COALESCE(uwp.status, 'new') NOT IN ('known', 'ignored')
       AND ex.word_id IS NULL
   `);
+};
 
 const getAvailableBlocks = async (): Promise<BlockMeta[]> => {
   const rows = await prisma.$queryRaw<Array<{ block: string; cefrLevel: string; blockOrder: number }>>(Prisma.sql`
@@ -940,19 +950,40 @@ const getAvailableBlocks = async (): Promise<BlockMeta[]> => {
     ORDER BY FIELD(ydc.cefr_level, 'A1','A2','B1','B2','C1','C2'), blockOrder ASC
   `);
 
-  return rows
+  const mapped = rows
     .map((row) => ({
       block: normalizeBlockKey(row.block) ?? row.block,
       cefrLevel: normalizeCefrLevel(row.cefrLevel) ?? 'A1',
       blockOrder: Number.isFinite(Number(row.blockOrder)) ? Number(row.blockOrder) : parseBlockOrder(row.block),
     }))
     .filter((row) => Boolean(row.block));
+
+  if (mapped.length > 0) return mapped;
+
+  // Fallback for databases where cefr_block is not backfilled yet.
+  const levelRows = await prisma.$queryRaw<Array<{ cefrLevel: string }>>(Prisma.sql`
+    SELECT DISTINCT ydc.cefr_level AS cefrLevel
+    FROM yandex_dictionary_cache ydc
+    WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
+      AND ydc.cefr_level IN ('A1','A2','B1','B2','C1','C2')
+    ORDER BY FIELD(ydc.cefr_level, 'A1','A2','B1','B2','C1','C2')
+  `);
+  return levelRows
+    .map((row) => normalizeCefrLevel(row.cefrLevel))
+    .filter((level): level is string => Boolean(level))
+    .map((level) => ({
+      block: `${level}_1`,
+      cefrLevel: level,
+      blockOrder: 1,
+    }));
 };
 
 const getBlockCompletion = async (
   userId: string,
   block: string,
 ): Promise<{ totalWords: number; knownWords: number; complete: boolean }> => {
+  const normalizedBlock = normalizeBlockKey(block);
+  const levelFallback = normalizedBlock ? normalizeCefrLevel(normalizedBlock.split('_')[0]) : null;
   const [row] = await prisma.$queryRaw<Array<{ totalWords: bigint; knownWords: bigint }>>(Prisma.sql`
     SELECT
       COUNT(*) AS totalWords,
@@ -962,7 +993,10 @@ const getBlockCompletion = async (
       ON uwp.word_id = ydc.id
       AND uwp.user_id = ${userId}
     WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
-      AND ydc.cefr_block = ${block}
+      AND (
+        ydc.cefr_block = ${block}
+        OR (ydc.cefr_block IS NULL AND ${levelFallback} IS NOT NULL AND ydc.cefr_level = ${levelFallback})
+      )
       AND ydc.cefr_level IN ('A1','A2','B1','B2','C1','C2')
   `);
   const totalWords = Number(row?.totalWords ?? 0);
@@ -972,6 +1006,36 @@ const getBlockCompletion = async (
     knownWords,
     complete: totalWords > 0 && knownWords >= totalWords,
   };
+};
+
+const getBlockCompletionMap = async (
+  userId: string,
+): Promise<Map<string, { totalWords: number; knownWords: number; complete: boolean }>> => {
+  const rows = await prisma.$queryRaw<Array<{ block: string; totalWords: bigint; knownWords: bigint }>>(Prisma.sql`
+    SELECT
+      COALESCE(ydc.cefr_block, CONCAT(ydc.cefr_level, '_1')) AS block,
+      COUNT(*) AS totalWords,
+      SUM(CASE WHEN uwp.status IN ('known', 'ignored') THEN 1 ELSE 0 END) AS knownWords
+    FROM yandex_dictionary_cache ydc
+    LEFT JOIN user_word_progress uwp
+      ON uwp.word_id = ydc.id
+      AND uwp.user_id = ${userId}
+    WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
+      AND ydc.cefr_level IN ('A1','A2','B1','B2','C1','C2')
+    GROUP BY COALESCE(ydc.cefr_block, CONCAT(ydc.cefr_level, '_1'))
+  `);
+  const map = new Map<string, { totalWords: number; knownWords: number; complete: boolean }>();
+  for (const row of rows) {
+    const block = normalizeBlockKey(row.block) ?? row.block;
+    const totalWords = Number(row.totalWords ?? 0);
+    const knownWords = Number(row.knownWords ?? 0);
+    map.set(block, {
+      totalWords,
+      knownWords,
+      complete: totalWords > 0 && knownWords >= totalWords,
+    });
+  }
+  return map;
 };
 
 const resolveUserCurrentBlock = async (
@@ -1004,8 +1068,13 @@ const resolveUserCurrentBlock = async (
     currentIndex = 0;
   }
 
+  const completionMap = await getBlockCompletionMap(userId);
   while (currentIndex < allBlocks.length - 1) {
-    const completion = await getBlockCompletion(userId, allBlocks[currentIndex].block);
+    const completion = completionMap.get(allBlocks[currentIndex].block) ?? {
+      totalWords: 0,
+      knownWords: 0,
+      complete: false,
+    };
     if (!completion.complete) break;
     currentIndex += 1;
     currentBlock = allBlocks[currentIndex].block;
@@ -1029,6 +1098,8 @@ const resolveUserCurrentBlock = async (
 };
 
 const seedProgressFromCurrentBlock = async (userId: string, block: string): Promise<void> => {
+  const normalizedBlock = normalizeBlockKey(block);
+  const levelFallback = normalizedBlock ? normalizeCefrLevel(normalizedBlock.split('_')[0]) : null;
   const rows = await prisma.$queryRaw<
     Array<{ id: number; query: string; lang: string; response: unknown; frequencyIndex: number | null }>
   >(Prisma.sql`
@@ -1036,7 +1107,10 @@ const seedProgressFromCurrentBlock = async (userId: string, block: string): Prom
     FROM yandex_dictionary_cache ydc
     LEFT JOIN exercise_excluded_words ex ON ex.word_id = ydc.id
     WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
-      AND ydc.cefr_block = ${block}
+      AND (
+        ydc.cefr_block = ${normalizedBlock}
+        OR (ydc.cefr_block IS NULL AND ${levelFallback} IS NOT NULL AND ydc.cefr_level = ${levelFallback})
+      )
       AND ydc.cefr_level IN ('A1','A2','B1','B2','C1','C2')
       AND ex.word_id IS NULL
   `);
