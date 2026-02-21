@@ -51,12 +51,14 @@ type ProgressRow = {
   created_at: Date;
   updated_at: Date;
   cefr_level?: string | null;
+  cefr_block?: string | null;
 };
 
 type SessionRow = {
   id: string;
   user_id: string;
   status: SessionStatus;
+  current_block: string | null;
   target_words: number;
   phrase_exercises_per_word: number;
   energy_start: number;
@@ -186,6 +188,12 @@ type StartSessionPreferences = {
   };
 };
 
+type BlockMeta = {
+  block: string;
+  cefrLevel: string;
+  blockOrder: number;
+};
+
 const SESSION_TARGET_DEFAULT = 5;
 const SESSION_TARGET_MIN = 1;
 const SESSION_TARGET_MAX = 5;
@@ -277,6 +285,18 @@ const getCefrBlockTitle = (block: string | null | undefined): string | null => {
   const match = key.match(/^([A-Z]\d)_(\d+)$/);
   if (!match) return null;
   return `Блок ${match[1]}-${match[2]}`;
+};
+
+const parseBlockOrder = (block: string | null | undefined): number => {
+  const match = String(block ?? '').trim().toUpperCase().match(/^[A-Z]\d_(\d+)$/);
+  if (!match) return Number.MAX_SAFE_INTEGER;
+  const n = Number(match[1]);
+  return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+};
+
+const normalizeBlockKey = (value: string | null | undefined): string | null => {
+  const raw = String(value ?? '').trim().toUpperCase();
+  return /^[A-Z]\d_\d+$/.test(raw) ? raw : null;
 };
 
 const normalizeOptionText = (value: string): string =>
@@ -461,6 +481,7 @@ const ensureWordTrainingTables = async () => {
       id VARCHAR(64) PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       status VARCHAR(16) NOT NULL DEFAULT 'active',
+      current_block VARCHAR(16) NULL,
       target_words INT NOT NULL DEFAULT 20,
       phrase_exercises_per_word INT NOT NULL DEFAULT 2,
       energy_start INT NOT NULL DEFAULT 100,
@@ -477,6 +498,20 @@ const ensureWordTrainingTables = async () => {
       KEY idx_word_training_sessions_user_date (user_id, started_at)
     )
   `);
+
+  const [currentBlockSessionColumn] = await prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+    SELECT COUNT(*) AS total
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = 'word_training_sessions'
+      AND column_name = 'current_block'
+  `);
+  if (Number(currentBlockSessionColumn?.total ?? 0) === 0) {
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE word_training_sessions
+      ADD COLUMN current_block VARCHAR(16) NULL AFTER status
+    `);
+  }
 
   const [phraseExercisesColumn] = await prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
     SELECT COUNT(*) AS total
@@ -582,6 +617,16 @@ const ensureWordTrainingTables = async () => {
       created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       KEY idx_word_training_events_session (session_id, created_at),
       KEY idx_word_training_events_user (user_id, created_at)
+    )
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS word_training_user_state (
+      user_id VARCHAR(191) PRIMARY KEY,
+      current_block VARCHAR(16) NOT NULL,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      KEY idx_word_training_user_state_block (current_block)
     )
   `);
 
@@ -836,7 +881,7 @@ const syncProgressFromSources = async (userId: string): Promise<void> => {
   }
 };
 
-const loadProgress = async (userId: string): Promise<ProgressRow[]> =>
+const loadProgress = async (userId: string, currentBlock?: string | null): Promise<ProgressRow[]> =>
   prisma.$queryRaw<ProgressRow[]>(Prisma.sql`
     SELECT
       p.id,
@@ -865,7 +910,8 @@ const loadProgress = async (userId: string): Promise<ProgressRow[]> =>
       p.last_grade,
       p.created_at,
       p.updated_at,
-      ydc.cefr_level
+      ydc.cefr_level,
+      ydc.cefr_block
     FROM word_training_progress p
     INNER JOIN yandex_dictionary_cache ydc ON ydc.id = p.yandex_cache_id
     LEFT JOIN user_word_progress uwp
@@ -874,26 +920,190 @@ const loadProgress = async (userId: string): Promise<ProgressRow[]> =>
     WHERE p.user_id = ${userId}
       AND ydc.cefr_level IS NOT NULL
       AND TRIM(ydc.cefr_level) <> ''
+      ${currentBlock ? Prisma.sql`AND ydc.cefr_block = ${currentBlock}` : Prisma.empty}
       AND COALESCE(uwp.status, 'new') NOT IN ('known', 'ignored')
       AND ex.word_id IS NULL
   `);
 
+const getAvailableBlocks = async (): Promise<BlockMeta[]> => {
+  const rows = await prisma.$queryRaw<Array<{ block: string; cefrLevel: string; blockOrder: number }>>(Prisma.sql`
+    SELECT
+      ydc.cefr_block AS block,
+      ydc.cefr_level AS cefrLevel,
+      CAST(SUBSTRING_INDEX(ydc.cefr_block, '_', -1) AS UNSIGNED) AS blockOrder
+    FROM yandex_dictionary_cache ydc
+    WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
+      AND ydc.cefr_level IN ('A1','A2','B1','B2','C1','C2')
+      AND ydc.cefr_block IS NOT NULL
+      AND TRIM(ydc.cefr_block) <> ''
+    GROUP BY ydc.cefr_block, ydc.cefr_level
+    ORDER BY FIELD(ydc.cefr_level, 'A1','A2','B1','B2','C1','C2'), blockOrder ASC
+  `);
+
+  return rows
+    .map((row) => ({
+      block: normalizeBlockKey(row.block) ?? row.block,
+      cefrLevel: normalizeCefrLevel(row.cefrLevel) ?? 'A1',
+      blockOrder: Number.isFinite(Number(row.blockOrder)) ? Number(row.blockOrder) : parseBlockOrder(row.block),
+    }))
+    .filter((row) => Boolean(row.block));
+};
+
+const getBlockCompletion = async (
+  userId: string,
+  block: string,
+): Promise<{ totalWords: number; knownWords: number; complete: boolean }> => {
+  const [row] = await prisma.$queryRaw<Array<{ totalWords: bigint; knownWords: bigint }>>(Prisma.sql`
+    SELECT
+      COUNT(*) AS totalWords,
+      SUM(CASE WHEN uwp.status IN ('known', 'ignored') THEN 1 ELSE 0 END) AS knownWords
+    FROM yandex_dictionary_cache ydc
+    LEFT JOIN user_word_progress uwp
+      ON uwp.word_id = ydc.id
+      AND uwp.user_id = ${userId}
+    WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
+      AND ydc.cefr_block = ${block}
+      AND ydc.cefr_level IN ('A1','A2','B1','B2','C1','C2')
+  `);
+  const totalWords = Number(row?.totalWords ?? 0);
+  const knownWords = Number(row?.knownWords ?? 0);
+  return {
+    totalWords,
+    knownWords,
+    complete: totalWords > 0 && knownWords >= totalWords,
+  };
+};
+
+const resolveUserCurrentBlock = async (
+  userId: string,
+  userLevel?: string | null,
+): Promise<{ currentBlock: string; currentLevel: string; levelBlocks: BlockMeta[]; completedInLevel: number }> => {
+  const allBlocks = await getAvailableBlocks();
+  if (!allBlocks.length) {
+    throw Object.assign(new Error('No CEFR blocks found in dictionary cache'), { status: 500 });
+  }
+
+  const preferredLevel = normalizeCefrLevel(userLevel ?? null) ?? 'A1';
+  const firstInPreferred = allBlocks.find((b) => b.cefrLevel === preferredLevel)?.block ?? allBlocks[0].block;
+
+  const [stateRow] = await prisma.$queryRaw<Array<{ currentBlock: string }>>(Prisma.sql`
+    SELECT current_block AS currentBlock
+    FROM word_training_user_state
+    WHERE user_id = ${userId}
+    LIMIT 1
+  `);
+
+  let currentBlock = normalizeBlockKey(stateRow?.currentBlock) ?? firstInPreferred;
+  let currentIndex = allBlocks.findIndex((b) => b.block === currentBlock);
+  if (currentIndex < 0) {
+    currentBlock = firstInPreferred;
+    currentIndex = allBlocks.findIndex((b) => b.block === currentBlock);
+  }
+  if (currentIndex < 0) {
+    currentBlock = allBlocks[0].block;
+    currentIndex = 0;
+  }
+
+  while (currentIndex < allBlocks.length - 1) {
+    const completion = await getBlockCompletion(userId, allBlocks[currentIndex].block);
+    if (!completion.complete) break;
+    currentIndex += 1;
+    currentBlock = allBlocks[currentIndex].block;
+  }
+
+  await prisma.$executeRaw(Prisma.sql`
+    INSERT INTO word_training_user_state (user_id, current_block)
+    VALUES (${userId}, ${currentBlock})
+    ON DUPLICATE KEY UPDATE current_block = VALUES(current_block)
+  `);
+
+  const currentMeta = allBlocks[currentIndex];
+  const levelBlocks = allBlocks.filter((b) => b.cefrLevel === currentMeta.cefrLevel);
+  const completedInLevel = levelBlocks.filter((b) => b.blockOrder < currentMeta.blockOrder).length;
+  return {
+    currentBlock,
+    currentLevel: currentMeta.cefrLevel,
+    levelBlocks,
+    completedInLevel,
+  };
+};
+
+const seedProgressFromCurrentBlock = async (userId: string, block: string): Promise<void> => {
+  const rows = await prisma.$queryRaw<
+    Array<{ id: number; query: string; lang: string; response: unknown; frequencyIndex: number | null }>
+  >(Prisma.sql`
+    SELECT ydc.id, ydc.query, ydc.lang, ydc.response, ydc.frequency_index AS frequencyIndex
+    FROM yandex_dictionary_cache ydc
+    LEFT JOIN exercise_excluded_words ex ON ex.word_id = ydc.id
+    WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
+      AND ydc.cefr_block = ${block}
+      AND ydc.cefr_level IN ('A1','A2','B1','B2','C1','C2')
+      AND ex.word_id IS NULL
+  `);
+
+  if (!rows.length) return;
+  const now = new Date();
+  for (const row of rows) {
+    const parsed = parsePrimaryFromYandex(row.query, row.lang, row.response);
+    if (!parsed) continue;
+    const word = normalizeText(parsed.word);
+    const translation = normalizeText(parsed.translation);
+    if (!word || !translation) continue;
+    const wordKey = normalizeWord(word);
+    if (!wordKey) continue;
+    const sourceWeight = Number.isFinite(Number(row.frequencyIndex))
+      ? Math.max(1, 100000 - Number(row.frequencyIndex))
+      : 1;
+
+    await prisma.$executeRaw(Prisma.sql`
+      INSERT INTO word_training_progress (
+        user_id,
+        word_key,
+        word,
+        translation,
+        source_type,
+        source_weight,
+        source_updated_at,
+        yandex_cache_id,
+        status,
+        srs_stage,
+        ease_factor,
+        interval_days
+      )
+      VALUES (
+        ${userId},
+        ${wordKey},
+        ${word},
+        ${translation},
+        'exercise',
+        ${sourceWeight},
+        ${now},
+        ${row.id},
+        'new',
+        0,
+        2.5,
+        0
+      )
+      ON DUPLICATE KEY UPDATE
+        word = VALUES(word),
+        translation = VALUES(translation),
+        source_weight = GREATEST(source_weight, VALUES(source_weight)),
+        source_updated_at = GREATEST(source_updated_at, VALUES(source_updated_at)),
+        yandex_cache_id = COALESCE(word_training_progress.yandex_cache_id, VALUES(yandex_cache_id))
+    `);
+  }
+};
+
 const buildDailyQueue = (
   rows: ProgressRow[],
   requestedTarget: number,
-  userLevel: string,
-  preferences?: StartSessionPreferences,
+  _currentBlock: string,
 ): {
   queue: QueueDraftItem[];
   reviewCount: number;
   mistakeCount: number;
   newCount: number;
 } => {
-  const normalizedUserLevel = normalizeCefrLevel(userLevel) ?? 'A1';
-  const levelIndex = CEFR_LEVELS.indexOf(normalizedUserLevel as (typeof CEFR_LEVELS)[number]);
-  const lowerLevel = levelIndex > 0 ? CEFR_LEVELS[levelIndex - 1] : null;
-  const higherLevel = levelIndex < CEFR_LEVELS.length - 1 ? CEFR_LEVELS[levelIndex + 1] : null;
-
   const now = Date.now();
   const target = clamp(requestedTarget, SESSION_TARGET_MIN, SESSION_TARGET_MAX);
   const newLimit = Math.max(1, Math.round(target * 0.6));
@@ -901,35 +1111,18 @@ const buildDailyQueue = (
   const mistakeTarget = Math.max(1, Math.round(target * 0.2));
 
   const scored = rows.map((row) => {
-    const cefrLevel = normalizeCefrLevel(row.cefr_level) ?? 'A1';
     const dueTs = row.due_at?.getTime() ?? 0;
     const overdueHours = dueTs > 0 && dueTs <= now ? Math.floor((now - dueTs) / 3_600_000) : 0;
     const accuracy = row.review_count > 0 ? row.correct_count / row.review_count : 0;
-    const interactionBoost =
-      preferences?.prioritizeUserInteractions === false
-        ? 0
-        : row.source_type === 'manual'
-        ? 5
-        : row.source_type === 'viewed'
-        ? 3
-        : 1;
+    const interactionBoost = row.source_type === 'manual' ? 5 : row.source_type === 'viewed' ? 3 : 1;
     const mistakePressure = row.wrong_count * 3 + Math.round((1 - accuracy) * 10) + interactionBoost;
     return {
       row,
-      cefrLevel,
       overdueHours,
       mistakePressure,
     };
   });
-
-  const filtered = scored.filter(({ cefrLevel }) => {
-    if (cefrLevel === normalizedUserLevel) return true;
-    if (lowerLevel && cefrLevel === lowerLevel) return true;
-    if (higherLevel && cefrLevel === higherLevel) return true;
-    return false;
-  });
-
-  const levelScoped = filtered.length ? filtered : scored;
+  const levelScoped = scored;
 
   const reviewPool = levelScoped
     .filter(
@@ -963,39 +1156,16 @@ const buildDailyQueue = (
 
   const selected = new Set<string>();
   const queue: QueueDraftItem[] = [];
-  const lowerWeight = clamp(preferences?.levelMix?.lowerLevelWeight ?? 0.15, 0, 1);
-  const higherWeight = clamp(preferences?.levelMix?.higherLevelWeight ?? 0.15, 0, 1);
-  const currentWeight = clamp(preferences?.levelMix?.currentLevelWeight ?? 0.7, 0, 1);
-  const totalWeight = Math.max(0.0001, lowerWeight + higherWeight + currentWeight);
-  const lowerQuota = lowerLevel ? Math.max(1, Math.floor((target * lowerWeight) / totalWeight)) : 0;
-  const higherQuota = higherLevel ? Math.max(1, Math.floor((target * higherWeight) / totalWeight)) : 0;
-  const currentQuota = Math.max(1, target - lowerQuota - higherQuota);
-  const quotas = new Map<string, number>([
-    [normalizedUserLevel, currentQuota],
-    ...(lowerLevel ? [[lowerLevel, lowerQuota] as const] : []),
-    ...(higherLevel ? [[higherLevel, higherQuota] as const] : []),
-  ]);
-  const taken = new Map<string, number>();
-  const canTakeByQuota = (cefrLevel: string): boolean => {
-    const quota = quotas.get(cefrLevel);
-    if (quota === undefined) return true;
-    return (taken.get(cefrLevel) ?? 0) < quota;
-  };
-  const markTaken = (cefrLevel: string) => {
-    taken.set(cefrLevel, (taken.get(cefrLevel) ?? 0) + 1);
-  };
-
   const pushFromPool = (
     pool: typeof reviewPool,
     reason: QueueReason,
     limit: number,
-    enforceQuota = true,
+    _enforceQuota = true,
   ) => {
     for (const item of pool) {
       if (queue.length >= target) break;
       if (selected.has(item.row.word_key)) continue;
       if (limit <= 0) break;
-      if (enforceQuota && !canTakeByQuota(item.cefrLevel)) continue;
       queue.push({
         wordKey: item.row.word_key,
         word: item.row.word,
@@ -1008,7 +1178,6 @@ const buildDailyQueue = (
         initialStage: item.row.srs_stage,
       });
       selected.add(item.row.word_key);
-      markTaken(item.cefrLevel);
       limit -= 1;
     }
   };
@@ -1861,6 +2030,7 @@ const buildSessionState = async (session: SessionRow) => {
       session: {
         id: fresh.id,
         status: fresh.status,
+        currentBlock: fresh.current_block,
         targetWords: fresh.target_words,
         energyStart: fresh.energy_start,
         energyLeft: fresh.energy_left,
@@ -1900,6 +2070,7 @@ const buildSessionState = async (session: SessionRow) => {
     session: {
       id: fresh.id,
       status: fresh.status,
+      currentBlock: fresh.current_block,
       targetWords: fresh.target_words,
       energyStart: fresh.energy_start,
       energyLeft: fresh.energy_left,
@@ -1920,6 +2091,12 @@ const buildSessionState = async (session: SessionRow) => {
 const loadOverview = async (userId: string) => {
   await ensureWordTrainingTables();
   await syncProgressFromSources(userId);
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { level: true },
+  });
+  const blockState = await resolveUserCurrentBlock(userId, user?.level);
+  const currentBlockCompletion = await getBlockCompletion(userId, blockState.currentBlock);
 
   const [countsRow] = await prisma.$queryRaw<
     Array<{
@@ -1980,12 +2157,32 @@ const loadOverview = async (userId: string) => {
       xpGained: Number(todayRow?.xpGained ?? 0),
       sessionsDone: Number(todayRow?.sessionsDone ?? 0),
     },
+    currentBlock: blockState.currentBlock,
+    currentLevel: blockState.currentLevel,
+    currentBlockTitle: getCefrBlockTitle(blockState.currentBlock),
+    levelRingProgress: {
+      completedBlocks: blockState.completedInLevel,
+      totalBlocks: blockState.levelBlocks.length,
+      percent:
+        blockState.levelBlocks.length > 0
+          ? Math.round((blockState.completedInLevel / blockState.levelBlocks.length) * 100)
+          : 0,
+    },
+    currentBlockProgress: {
+      knownWords: currentBlockCompletion.knownWords,
+      totalWords: currentBlockCompletion.totalWords,
+      percent:
+        currentBlockCompletion.totalWords > 0
+          ? Math.round((currentBlockCompletion.knownWords / currentBlockCompletion.totalWords) * 100)
+          : 0,
+    },
     activeSession: activeSession
       ? {
           id: activeSession.id,
           energyLeft: activeSession.energy_left,
           wordsCompleted: activeSession.words_completed,
           targetWords: activeSession.target_words,
+          currentBlock: activeSession.current_block,
         }
       : null,
   };
@@ -2008,7 +2205,9 @@ const startSession = async (
     where: { id: userId },
     select: { level: true },
   });
-  const progressRows = await loadProgress(userId);
+  const blockState = await resolveUserCurrentBlock(userId, user?.level);
+  await seedProgressFromCurrentBlock(userId, blockState.currentBlock);
+  const progressRows = await loadProgress(userId, blockState.currentBlock);
   if (!progressRows.length) {
     throw Object.assign(new Error('Нет слов для тренировки. Добавьте слова в словарь или откройте переводы в видео.'), {
       status: 400,
@@ -2020,8 +2219,7 @@ const startSession = async (
     SESSION_TARGET_MIN,
     SESSION_TARGET_MAX,
   );
-  const effectiveLevel = preferences?.cefrLevel ?? normalizeCefrLevel(user?.level) ?? 'A1';
-  const queueBuild = buildDailyQueue(progressRows, requestedTarget, effectiveLevel, preferences);
+  const queueBuild = buildDailyQueue(progressRows, requestedTarget, blockState.currentBlock);
   const maxUniqueWords = clamp(preferences?.maxUniqueWords ?? 5, 1, 5);
   queueBuild.queue = queueBuild.queue.slice(0, maxUniqueWords);
   queueBuild.queue = shuffleArray(queueBuild.queue);
@@ -2046,6 +2244,7 @@ const startSession = async (
         id,
         user_id,
         status,
+        current_block,
         target_words,
         phrase_exercises_per_word,
         energy_start,
@@ -2058,6 +2257,7 @@ const startSession = async (
         ${sessionId},
         ${userId},
         'active',
+        ${blockState.currentBlock},
         ${queueBuild.queue.length},
         ${phraseExercisesPerWord},
         ${SESSION_ENERGY_START},
