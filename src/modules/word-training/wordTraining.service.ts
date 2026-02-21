@@ -198,6 +198,52 @@ const REINFORCEMENT_ENERGY_COST = 3;
 const SOURCE_LIMIT = 500;
 const MAX_RETRY_ATTEMPTS = 2;
 const CEFR_LEVELS: Array<'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2'> = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
+const CEFR_BLOCK_TITLES: Record<string, string> = {
+  A1_1: 'Скелет языка',
+  A1_2: 'Первые кирпичи',
+  A1_3: 'Бытовой минимум',
+  A1_4: 'Ориентация в мире',
+  A1_5: 'Жизненный комфорт',
+  A1_6: 'Описание реальности',
+  A1_7: 'Повседневный ритм',
+  A1_8: 'Финишная прямая A1',
+
+  A2_1: 'Уверенный старт',
+  A2_2: 'Личность и чувства',
+  A2_3: 'Работа и хобби',
+  A2_4: 'Городские джунгли',
+  A2_5: 'Впечатления',
+  A2_6: 'Детали и уточнения',
+  A2_7: 'Социальные связи',
+  A2_8: 'Порог понимания',
+
+  B1_1: 'Свобода мнения',
+  B1_2: 'Абстрактные понятия',
+  B1_3: 'Современная жизнь',
+  B1_4: 'Профессиональный рост',
+  B1_5: 'Мир отношений',
+  B1_6: 'Логика и порядок',
+  B1_7: 'Здоровье и развитие',
+  B1_8: 'Экватор пройден',
+
+  B2_1: 'Мастер контекста',
+  B2_2: 'Бизнес-среда',
+  B2_3: 'Мировые проблемы',
+  B2_4: 'Интеллектуальный досуг',
+  B2_5: 'Сложные описания',
+  B2_6: 'Дискуссия и спор',
+  B2_7: 'Социальные нюансы',
+  B2_8: 'Вершина B2',
+
+  C1_1: 'Интеллектуальный лоск',
+  C1_2: 'Тонкие материи',
+  C1_3: 'Риторика и власть',
+  C1_4: 'Глубокая аналитика',
+  C1_5: 'Официальный стиль',
+  C1_6: 'Литературный пласт',
+  C1_7: 'Уровень эксперта',
+  C1_8: 'Native-like',
+};
 
 let tablesReady = false;
 
@@ -217,6 +263,14 @@ const normalizeText = (value: string): string => value.trim().replace(/\s+/g, ' 
 const normalizeCefrLevel = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim().toUpperCase();
   return CEFR_LEVELS.includes(normalized as (typeof CEFR_LEVELS)[number]) ? normalized : null;
+};
+const getCefrBlockTitle = (block: string | null | undefined): string | null => {
+  const key = String(block ?? '').trim().toUpperCase();
+  if (!key) return null;
+  if (CEFR_BLOCK_TITLES[key]) return CEFR_BLOCK_TITLES[key];
+  const match = key.match(/^([A-Z]\d)_(\d+)$/);
+  if (!match) return null;
+  return `Блок ${match[1]}-${match[2]}`;
 };
 
 const normalizeOptionText = (value: string): string =>
@@ -2865,6 +2919,7 @@ const getWordMasteryMap = async (userId: string) => {
   };
   const byLevel: Record<string, { total: number; known: number; learning: number; new: number }> = {};
   const byBlock: Record<string, { total: number; known: number; learning: number; new: number }> = {};
+  const blockTitles: Record<string, string> = {};
 
   for (const row of rows) {
     byStatus[row.mastery] += 1;
@@ -2875,6 +2930,8 @@ const getWordMasteryMap = async (userId: string) => {
     byLevel[row.cefrLevel][row.mastery] += 1;
 
     const blockKey = row.cefrBlock || `${row.cefrLevel}_0`;
+    const title = getCefrBlockTitle(blockKey);
+    if (title) blockTitles[blockKey] = title;
     if (!byBlock[blockKey]) {
       byBlock[blockKey] = { total: 0, known: 0, learning: 0, new: 0 };
     }
@@ -2887,6 +2944,7 @@ const getWordMasteryMap = async (userId: string) => {
     byStatus,
     byLevel,
     byBlock,
+    blockTitles,
     items: rows.map((row) => ({
       id: row.id,
       word: row.word,
