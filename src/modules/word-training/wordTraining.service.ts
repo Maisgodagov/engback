@@ -188,6 +188,29 @@ type StartSessionPreferences = {
   };
 };
 
+type IntroQueueItem = {
+  wordKey: string;
+  word: string;
+  translation: string;
+  pronunciationAudioUrl: string | null;
+  cefrLevel: string | null;
+  otherTranslations: string[];
+};
+
+type SessionFlowStageKey = 'intro' | 'recognition' | 'matching' | 'deep_work' | 'retry' | 'result';
+
+type SessionFlowStage = {
+  key: SessionFlowStageKey;
+  label: string;
+  total: number;
+  completed: number;
+};
+
+type SessionFlow = {
+  currentStage: SessionFlowStageKey;
+  stages: SessionFlowStage[];
+};
+
 type BlockMeta = {
   block: string;
   cefrLevel: string;
@@ -1466,22 +1489,76 @@ const getRecognitionOptions = async (
       AND TRIM(ydc.cefr_level) <> ''
       AND ex.word_id IS NULL
     ORDER BY RAND()
-    LIMIT 40
+    LIMIT 120
   `);
 
   const correctNorm = normalizeOptionText(correct);
   const seen = new Set<string>([correctNorm]);
-  const distractors: string[] = [];
+  const scoredDistractors: Array<{ text: string; score: number }> = [];
+  const levenshtein = (a: string, b: string): number => {
+    if (a === b) return 0;
+    if (!a.length) return b.length;
+    if (!b.length) return a.length;
+    const prev = new Array(b.length + 1).fill(0).map((_, i) => i);
+    const curr = new Array(b.length + 1).fill(0);
+    for (let i = 1; i <= a.length; i += 1) {
+      curr[0] = i;
+      for (let j = 1; j <= b.length; j += 1) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+      }
+      for (let j = 0; j <= b.length; j += 1) prev[j] = curr[j];
+    }
+    return prev[b.length];
+  };
+  const correctCompact = correctNorm.replace(/\s+/g, '');
   for (const row of rows) {
     const candidate = row.translation.trim();
     const norm = normalizeOptionText(candidate);
     if (!candidate || !norm || seen.has(norm)) continue;
     seen.add(norm);
-    distractors.push(candidate);
-    if (distractors.length >= 3) break;
+    const compact = norm.replace(/\s+/g, '');
+    const distance = levenshtein(correctCompact, compact);
+    const prefixBonus = compact && correctCompact && compact[0] === correctCompact[0] ? -0.5 : 0;
+    const lenPenalty = Math.abs(compact.length - correctCompact.length) * 0.15;
+    scoredDistractors.push({ text: candidate, score: distance + lenPenalty + prefixBonus });
   }
 
+  const distractors = scoredDistractors
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 3)
+    .map((item) => item.text);
+
   return shuffleArray([correct, ...distractors]).slice(0, 4);
+};
+
+const getIntroQueue = async (sessionId: string): Promise<IntroQueueItem[]> => {
+  const rows = await prisma.$queryRaw<
+    Array<{ wordKey: string; word: string; translation: string; yandexCacheId: number | null }>
+  >(Prisma.sql`
+    SELECT
+      i.word_key AS wordKey,
+      i.word AS word,
+      i.translation AS translation,
+      i.yandex_cache_id AS yandexCacheId
+    FROM word_training_session_items i
+    WHERE i.session_id = ${sessionId}
+      AND i.phase = 'recognition'
+      AND i.state = 'pending'
+    GROUP BY i.word_key, i.word, i.translation, i.yandex_cache_id
+    ORDER BY MIN(i.queue_order) ASC
+  `);
+
+  return Promise.all(
+    rows.map(async (row) => ({
+      wordKey: row.wordKey,
+      word: row.word,
+      translation: row.translation,
+      pronunciationAudioUrl: await getPronunciationAudioUrl(row.yandexCacheId, row.word),
+      cefrLevel: await getWordCefrLevel(row.yandexCacheId, row.word),
+      otherTranslations: await getAlternativeTranslations(row.yandexCacheId, row.word, row.translation),
+    })),
+  );
 };
 
 const getPronunciationAudioUrl = async (
@@ -1802,6 +1879,7 @@ const buildAudioAssembleExercise = async (
 const buildMatchPairsExercise = async (
   userId: string,
   current: { wordKey: string; word: string; translation: string; yandexCacheId: number | null },
+  sessionId?: string,
 ): Promise<MatchPairsExercisePayload> => {
   const base: Array<{ word: string; translation: string; yandexCacheId: number | null }> = [
     {
@@ -1810,6 +1888,37 @@ const buildMatchPairsExercise = async (
       yandexCacheId: current.yandexCacheId,
     },
   ];
+
+  if (sessionId) {
+    const sessionPairs = await prisma.$queryRaw<
+      Array<{ word: string; translation: string; yandexCacheId: number | null }>
+    >(Prisma.sql`
+      SELECT
+        i.word AS word,
+        i.translation AS translation,
+        i.yandex_cache_id AS yandexCacheId
+      FROM word_training_session_items i
+      WHERE i.session_id = ${sessionId}
+        AND i.phase = 'recognition'
+      GROUP BY i.word_key, i.word, i.translation, i.yandex_cache_id
+      ORDER BY MIN(i.queue_order) ASC
+      LIMIT 5
+    `);
+
+    const seenWordsSession = new Set<string>([normalizeWord(current.word)]);
+    const seenTranslationsSession = new Set<string>([normalizeOptionText(current.translation)]);
+    for (const row of sessionPairs) {
+      const word = normalizeText(row.word);
+      const translation = normalizeText(row.translation);
+      const wk = normalizeWord(word);
+      const tk = normalizeOptionText(translation);
+      if (!word || !translation || !wk || !tk) continue;
+      if (seenWordsSession.has(wk) || seenTranslationsSession.has(tk)) continue;
+      seenWordsSession.add(wk);
+      seenTranslationsSession.add(tk);
+      base.push({ word, translation, yandexCacheId: row.yandexCacheId ? Number(row.yandexCacheId) : null });
+    }
+  }
 
   const distractors = await prisma.$queryRaw<
     Array<{ word: string; translation: string; yandexCacheId: number | null }>
@@ -1860,7 +1969,7 @@ const buildMatchPairsExercise = async (
     }
   }
 
-  const trimmed = base.slice(0, 4);
+  const trimmed = base.slice(0, 5);
   const pairs = await Promise.all(
     trimmed.map(async (row) => ({
       word: row.word,
@@ -1945,20 +2054,9 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     };
   }
 
-  const [matchPairsRow] = await prisma.$queryRaw<Array<{ countItems: bigint }>>(Prisma.sql`
-    SELECT COUNT(*) AS countItems
-    FROM word_training_session_items
-    WHERE session_id = ${sessionId}
-      AND reinforcement_type = 'match_pairs'
-      AND id <> ${item.id}
-  `);
-  const hasMatchPairsInSession = Number(matchPairsRow?.countItems ?? 0) > 0;
-
   let reinforcementType: ExerciseType;
-  const shouldInsertSingleMatchPairs =
-    !hasMatchPairsInSession && position.position >= Math.max(2, Math.ceil(position.total * 0.6));
-  if (shouldInsertSingleMatchPairs) {
-    reinforcementType = 'match_pairs';
+  if (item.reinforcement_type === 'missing' || item.reinforcement_type === 'audio_assemble' || item.reinforcement_type === 'match_pairs') {
+    reinforcementType = item.reinforcement_type;
   } else {
     const itemIdSeed = Number(item.id ?? 0);
     reinforcementType = pickPhraseReinforcementType(
@@ -1991,7 +2089,6 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
               SELECT reinforcement_sentence_en AS phraseEn
               FROM word_training_session_items
               WHERE session_id = ${sessionId}
-                AND word_key = ${item.word_key}
                 AND id <> ${item.id}
                 AND reinforcement_sentence_en IS NOT NULL
                 AND TRIM(reinforcement_sentence_en) <> ''
@@ -2039,7 +2136,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
       word: item.word,
       translation: item.translation,
       yandexCacheId: item.yandex_cache_id,
-    });
+    }, sessionId);
   }
 
   return {
@@ -2057,6 +2154,111 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     pronunciationAudioUrl: reinforcementAudioUrl,
     cefrLevel: wordCefrLevel,
     reinforcement,
+  };
+};
+
+const buildSessionFlowState = async (
+  sessionId: string,
+  currentTask: Awaited<ReturnType<typeof mapTask>> | null,
+  retryPhaseActive: boolean,
+  isCompleted: boolean,
+): Promise<SessionFlow> => {
+  const rows = await prisma.$queryRaw<
+    Array<{
+      phase: string;
+      reason: string;
+      state: string;
+      reinforcementType: string | null;
+      cnt: bigint;
+    }>
+  >(Prisma.sql`
+    SELECT
+      phase,
+      reason,
+      state,
+      reinforcement_type AS reinforcementType,
+      COUNT(*) AS cnt
+    FROM word_training_session_items
+    WHERE session_id = ${sessionId}
+    GROUP BY phase, reason, state, reinforcement_type
+  `);
+
+  const stages: SessionFlowStage[] = [
+    { key: 'intro', label: 'Знакомство', total: 0, completed: 0 },
+    { key: 'recognition', label: 'Узнавание', total: 0, completed: 0 },
+    { key: 'matching', label: 'Сопоставление', total: 0, completed: 0 },
+    { key: 'deep_work', label: 'Контекст и аудирование', total: 0, completed: 0 },
+    { key: 'retry', label: 'Закрепляем ошибки', total: 0, completed: 0 },
+    { key: 'result', label: 'Результат', total: 1, completed: isCompleted ? 1 : 0 },
+  ];
+
+  const byKey = new Map<SessionFlowStageKey, SessionFlowStage>(stages.map((stage) => [stage.key, stage]));
+
+  for (const row of rows) {
+    const count = Number(row.cnt ?? 0);
+    const isCompletedRow = row.state === 'completed';
+    const isRetry = row.reason === 'retry';
+    const isRecognition = row.phase === 'recognition';
+    const isMatching = row.phase === 'reinforcement' && row.reinforcementType === 'match_pairs';
+    const isDeepWork = row.phase === 'reinforcement' && row.reinforcementType !== 'match_pairs';
+
+    if (isRecognition && !isRetry) {
+      const intro = byKey.get('intro');
+      const recognition = byKey.get('recognition');
+      if (intro && recognition) {
+        intro.total += count;
+        recognition.total += count;
+        if (isCompletedRow) {
+          intro.completed += count;
+          recognition.completed += count;
+        }
+      }
+      continue;
+    }
+
+    if (isMatching) {
+      const matching = byKey.get('matching');
+      if (matching) {
+        matching.total += count;
+        if (isCompletedRow) matching.completed += count;
+      }
+      continue;
+    }
+
+    if (isDeepWork && !isRetry) {
+      const deep = byKey.get('deep_work');
+      if (deep) {
+        deep.total += count;
+        if (isCompletedRow) deep.completed += count;
+      }
+      continue;
+    }
+
+    if (isRetry) {
+      const retry = byKey.get('retry');
+      if (retry) {
+        retry.total += count;
+        if (isCompletedRow) retry.completed += count;
+      }
+    }
+  }
+
+  let currentStage: SessionFlowStageKey = 'result';
+  if (!isCompleted) {
+    if (retryPhaseActive) {
+      currentStage = 'retry';
+    } else if (currentTask?.mode === 'recognition') {
+      currentStage = 'recognition';
+    } else if (currentTask?.mode === 'reinforcement') {
+      currentStage = currentTask.reinforcement.type === 'match_pairs' ? 'matching' : 'deep_work';
+    } else {
+      currentStage = 'intro';
+    }
+  }
+
+  return {
+    currentStage,
+    stages,
   };
 };
 
@@ -2100,6 +2302,7 @@ const buildSessionState = async (session: SessionRow) => {
       LIMIT 20
     `);
 
+    const sessionFlow = await buildSessionFlowState(fresh.id, null, false, true);
     return {
       session: {
         id: fresh.id,
@@ -2117,6 +2320,8 @@ const buildSessionState = async (session: SessionRow) => {
         completedAt: fresh.completed_at,
       },
       task: null,
+      introQueue: [] as IntroQueueItem[],
+      sessionFlow,
       summary: {
         totalXpToday: Number(dailyRow?.totalXp ?? 0),
         totalWordsToday: Number(dailyRow?.totalWords ?? 0),
@@ -2140,6 +2345,8 @@ const buildSessionState = async (session: SessionRow) => {
   `);
   const retryPhaseActive =
     Number(pendingPhase?.pendingRetry ?? 0) > 0 && Number(pendingPhase?.pendingRegular ?? 0) === 0;
+  const currentTask = item ? await mapTask(fresh.user_id, fresh.id, item) : null;
+  const sessionFlow = await buildSessionFlowState(fresh.id, currentTask, retryPhaseActive, false);
   return {
     session: {
       id: fresh.id,
@@ -2156,7 +2363,9 @@ const buildSessionState = async (session: SessionRow) => {
       startedAt: fresh.started_at,
       completedAt: fresh.completed_at,
     },
-    task: item ? await mapTask(fresh.user_id, fresh.id, item) : null,
+    task: currentTask,
+    introQueue: await getIntroQueue(fresh.id),
+    sessionFlow,
     retryPhase: retryPhaseActive,
     retryPhaseTitle: retryPhaseActive ? 'Закрепляем ошибки' : null,
   };
@@ -2377,6 +2586,92 @@ const startSession = async (
         )
       `);
     }
+
+    let queueOrder = queueBuild.queue.length;
+
+    if (queueBuild.queue.length > 0) {
+      const anchor = queueBuild.queue[0];
+      queueOrder += 1;
+      await tx.$executeRaw(Prisma.sql`
+        INSERT INTO word_training_session_items (
+          session_id,
+          queue_order,
+          word_key,
+          word,
+          translation,
+          source_type,
+          yandex_cache_id,
+          reason,
+          priority_score,
+          initial_status,
+          initial_stage,
+          phase,
+          state,
+          reinforcement_type,
+          attempt_count
+        )
+        VALUES (
+          ${sessionId},
+          ${queueOrder},
+          ${anchor.wordKey},
+          ${anchor.word},
+          ${anchor.translation},
+          ${anchor.sourceType},
+          ${anchor.yandexCacheId},
+          ${anchor.reason},
+          ${anchor.priorityScore + 10},
+          ${anchor.initialStatus},
+          ${anchor.initialStage},
+          'reinforcement',
+          'pending',
+          'match_pairs',
+          0
+        )
+      `);
+    }
+
+    for (const item of queueBuild.queue) {
+      for (let round = 0; round < phraseExercisesPerWord; round += 1) {
+        const reinforcementType = pickPhraseReinforcementType(item.wordKey, item.priorityScore + round + 1);
+        queueOrder += 1;
+        await tx.$executeRaw(Prisma.sql`
+          INSERT INTO word_training_session_items (
+            session_id,
+            queue_order,
+            word_key,
+            word,
+            translation,
+            source_type,
+            yandex_cache_id,
+            reason,
+            priority_score,
+            initial_status,
+            initial_stage,
+            phase,
+            state,
+            reinforcement_type,
+            attempt_count
+          )
+          VALUES (
+            ${sessionId},
+            ${queueOrder},
+            ${item.wordKey},
+            ${item.word},
+            ${item.translation},
+            ${item.sourceType},
+            ${item.yandexCacheId},
+            ${item.reason},
+            ${item.priorityScore + 1 + round},
+            ${item.initialStatus},
+            ${item.initialStage},
+            'reinforcement',
+            'pending',
+            ${reinforcementType},
+            ${round}
+          )
+        `);
+      }
+    }
   });
 
   const created = await getSessionById(sessionId, userId);
@@ -2427,12 +2722,6 @@ const submitRecognition = async (
     const srs = calculateSrsAfterGrade(progress, input.grade, now);
     const nextAttempts = item.attempt_count + 1;
     const shouldRetry = input.grade === 'again' && nextAttempts < MAX_RETRY_ATTEMPTS;
-    const phraseRounds = clamp(
-      Math.floor(session.phrase_exercises_per_word || PHRASE_EXERCISES_PER_WORD_DEFAULT),
-      1,
-      PHRASE_EXERCISES_PER_WORD_MAX,
-    );
-    const needsReinforcement = input.grade !== 'again';
 
     await tx.$executeRaw(Prisma.sql`
       UPDATE word_training_progress
@@ -2535,50 +2824,6 @@ const submitRecognition = async (
       `);
     }
 
-    if (needsReinforcement) {
-      const [maxOrderRow] = await tx.$queryRaw<Array<{ maxOrder: number | null }>>(Prisma.sql`
-        SELECT MAX(queue_order) AS maxOrder
-        FROM word_training_session_items
-        WHERE session_id = ${sessionId}
-      `);
-      const baseOrder = Number(maxOrderRow?.maxOrder ?? 0);
-      for (let round = 0; round < phraseRounds; round += 1) {
-        await tx.$executeRaw(Prisma.sql`
-          INSERT INTO word_training_session_items (
-            session_id,
-            queue_order,
-            word_key,
-            word,
-            translation,
-            source_type,
-            yandex_cache_id,
-            reason,
-            priority_score,
-            initial_status,
-            initial_stage,
-            phase,
-            state,
-            attempt_count
-          )
-          VALUES (
-            ${sessionId},
-            ${baseOrder + round + 1},
-            ${item.word_key},
-            ${item.word},
-            ${item.translation},
-            ${item.source_type},
-            ${item.yandex_cache_id},
-            ${item.reason},
-            ${item.priority_score + 1 + round},
-            ${srs.nextStatus},
-            ${srs.nextStage},
-            'reinforcement',
-            'pending',
-            ${round}
-          )
-        `);
-      }
-    }
     await tx.$executeRaw(Prisma.sql`
       UPDATE word_training_sessions
       SET
