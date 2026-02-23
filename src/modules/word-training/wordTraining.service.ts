@@ -2144,7 +2144,7 @@ const buildMatchPairsExercise = async (
         AND i.phase = 'recognition'
       GROUP BY i.word_key, i.word, i.translation, i.yandex_cache_id
       ORDER BY MIN(i.queue_order) ASC
-      LIMIT 5
+      LIMIT 64
     `);
 
     const seenWordsSession = new Set<string>([normalizeWord(current.word)]);
@@ -2159,6 +2159,7 @@ const buildMatchPairsExercise = async (
       seenWordsSession.add(wk);
       seenTranslationsSession.add(tk);
       base.push({ word, translation, yandexCacheId: row.yandexCacheId ? Number(row.yandexCacheId) : null });
+      if (base.length >= 5) break;
     }
   }
 
