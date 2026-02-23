@@ -1577,7 +1577,8 @@ const completeSessionIfNeeded = async (session: SessionRow): Promise<SessionRow>
   if (session.status !== 'active') return session;
 
   const pendingCount = await getSessionPendingCount(session.id);
-  if (pendingCount > 0 && session.energy_left > 0) return session;
+  const reachedTarget = session.words_completed >= session.target_words;
+  if (!reachedTarget && pendingCount > 0 && session.energy_left > 0) return session;
 
   await prisma.$transaction(async (tx) => {
     const [fresh] = await tx.$queryRaw<SessionRow[]>(Prisma.sql`
@@ -2890,7 +2891,16 @@ const startSession = async (
 
   const existing = await getActiveSession(userId);
   if (existing) {
-    return buildSessionState(existing);
+    if (existing.words_completed >= existing.target_words) {
+      await completeSessionIfNeeded(existing);
+    } else {
+      return buildSessionState(existing);
+    }
+  }
+
+  const stillActive = await getActiveSession(userId);
+  if (stillActive) {
+    return buildSessionState(stillActive);
   }
 
   await syncProgressFromSources(userId);
@@ -3660,7 +3670,8 @@ const markWordKnown = async (
       AND state = 'pending'
   `);
   const activeWordKeys = new Set(activeWordRows.map((row) => row.wordKey));
-  const missingWords = Math.max(0, refreshed.target_words - activeWordKeys.size);
+  const remainingTargetWords = Math.max(0, refreshed.target_words - refreshed.words_completed);
+  const missingWords = Math.max(0, remainingTargetWords - activeWordKeys.size);
 
   if (missingWords > 0) {
     await syncProgressFromSources(userId);
