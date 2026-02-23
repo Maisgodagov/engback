@@ -6,6 +6,7 @@ import { prisma } from '../../shared/prisma/prismaClient';
 
 // OPTIMIZATION: Cache flags to avoid checking schema on every request
 let xpColumnChecked = false;
+let streakTableChecked = false;
 
 const listUsers = async (limit?: number, offset?: number): Promise<UserProfileDto[]> => {
   // OPTIMIZATION: Check xpColumn only once at startup
@@ -88,7 +89,28 @@ const ensureXpColumn = async () => {
   xpColumnChecked = true;
 };
 
+const ensureStreakTable = async () => {
+  if (streakTableChecked) return;
+  await prisma.$executeRawUnsafe(
+    `CREATE TABLE IF NOT EXISTS user_streaks (
+      userId VARCHAR(191) PRIMARY KEY,
+      lastSeenAt DATETIME(3) NOT NULL,
+      updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+    )`,
+  );
+  streakTableChecked = true;
+};
+
 const refreshStreak = async (userId: string): Promise<{ streakDays: number }> => {
+  await ensureStreakTable();
+  const now = new Date();
+  await prisma.$executeRaw(Prisma.sql`
+    INSERT INTO user_streaks (userId, lastSeenAt)
+    VALUES (${userId}, ${now})
+    ON DUPLICATE KEY UPDATE
+      lastSeenAt = VALUES(lastSeenAt)
+  `);
+
   const completionDates = await loadTrainingCompletionDates(userId);
   const next = calculateTrainingStreak(completionDates, new Date());
   await prisma.user.update({ where: { id: userId }, data: { streakDays: next } });
