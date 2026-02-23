@@ -36,6 +36,10 @@ export const submitReinforcementSchema = z.object({
   isCorrect: z.boolean(),
 });
 
+export const markWordKnownSchema = z.object({
+  wordKey: z.string().trim().min(1).max(191),
+});
+
 export const getExamplesSchema = z.object({
   word: z.string().trim().min(1).max(120),
   limit: z.coerce.number().int().min(1).max(30).optional(),
@@ -51,5 +55,6 @@ export const finishSessionSchema = z.object({
 export type StartSessionInput = z.infer<typeof startSessionSchema>;
 export type SubmitRecognitionInput = z.infer<typeof submitRecognitionSchema>;
 export type SubmitReinforcementInput = z.infer<typeof submitReinforcementSchema>;
+export type MarkWordKnownInput = z.infer<typeof markWordKnownSchema>;
 export type GetExamplesInput = z.infer<typeof getExamplesSchema>;
 export type FinishSessionInput = z.infer<typeof finishSessionSchema>;

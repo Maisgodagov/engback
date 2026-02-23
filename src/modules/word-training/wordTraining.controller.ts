@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import {
   finishSessionSchema,
   getExamplesSchema,
+  markWordKnownSchema,
   startSessionSchema,
   submitRecognitionSchema,
   submitReinforcementSchema,
@@ -109,6 +110,26 @@ export const submitReinforcement = async (req: Request, res: Response) => {
     }
     const payload = submitReinforcementSchema.parse(req.body ?? {});
     const state = await wordTrainingService.submitReinforcement(userId, sessionId, payload);
+    res.json(state);
+  } catch (error) {
+    handleControllerError(res, error);
+  }
+};
+
+export const markWordKnown = async (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) {
+      res.status(401).json({ message: 'Missing user identifier' });
+      return;
+    }
+    const sessionId = String(req.params.sessionId ?? '').trim();
+    if (!sessionId) {
+      res.status(400).json({ message: 'Missing session id' });
+      return;
+    }
+    const payload = markWordKnownSchema.parse(req.body ?? {});
+    const state = await wordTrainingService.markWordKnown(userId, sessionId, payload);
     res.json(state);
   } catch (error) {
     handleControllerError(res, error);

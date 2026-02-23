@@ -10,4 +10,5 @@ wordTrainingRouter.post('/sessions', wordTrainingController.startSession);
 wordTrainingRouter.get('/sessions/:sessionId', wordTrainingController.getCurrentTask);
 wordTrainingRouter.post('/sessions/:sessionId/recognition', wordTrainingController.submitRecognition);
 wordTrainingRouter.post('/sessions/:sessionId/reinforcement', wordTrainingController.submitReinforcement);
+wordTrainingRouter.post('/sessions/:sessionId/know-word', wordTrainingController.markWordKnown);
 wordTrainingRouter.post('/sessions/:sessionId/finish', wordTrainingController.finishSession);

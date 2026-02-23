@@ -1328,6 +1328,52 @@ const buildDailyQueue = (
   };
 };
 
+const mapProgressRowToQueueDraft = (row: ProgressRow): QueueDraftItem => {
+  const reason: QueueReason = row.status === 'new' ? 'new' : 'review';
+  const priorityScore = row.source_weight + row.wrong_count * 2 + row.correct_count;
+  return {
+    wordKey: row.word_key,
+    word: row.word,
+    translation: row.translation,
+    sourceType: row.source_type,
+    yandexCacheId: row.yandex_cache_id,
+    reason,
+    priorityScore,
+    initialStatus: row.status,
+    initialStage: row.srs_stage,
+  };
+};
+
+const pickReplacementQueue = (
+  rows: ProgressRow[],
+  currentBlock: string | null,
+  existingWordKeys: Set<string>,
+  limit: number,
+): QueueDraftItem[] => {
+  const desired = Math.max(0, limit);
+  if (!desired) return [];
+  const queueBuild = buildDailyQueue(rows, SESSION_TARGET_MAX, currentBlock ?? '');
+  const picked = new Map<string, QueueDraftItem>();
+  for (const item of queueBuild.queue) {
+    if (picked.size >= desired) break;
+    if (existingWordKeys.has(item.wordKey)) continue;
+    picked.set(item.wordKey, item);
+  }
+  if (picked.size >= desired) return Array.from(picked.values());
+
+  const fallback = [...rows].sort((a, b) => {
+    if (b.source_weight !== a.source_weight) return b.source_weight - a.source_weight;
+    return b.source_updated_at.getTime() - a.source_updated_at.getTime();
+  });
+  for (const row of fallback) {
+    if (picked.size >= desired) break;
+    if (existingWordKeys.has(row.word_key)) continue;
+    if (picked.has(row.word_key)) continue;
+    picked.set(row.word_key, mapProgressRowToQueueDraft(row));
+  }
+  return Array.from(picked.values());
+};
+
 const getActiveSession = async (userId: string): Promise<SessionRow | null> => {
   const [row] = await prisma.$queryRaw<SessionRow[]>(Prisma.sql`
     SELECT *
@@ -1356,6 +1402,100 @@ const getSessionPendingCount = async (sessionId: string): Promise<number> => {
     WHERE session_id = ${sessionId} AND state = 'pending'
   `);
   return Number(row?.total ?? 0);
+};
+
+const appendQueueItemsToSession = async (
+  tx: Prisma.TransactionClient,
+  session: SessionRow,
+  items: QueueDraftItem[],
+): Promise<void> => {
+  if (!items.length) return;
+  const [maxOrderRow] = await tx.$queryRaw<Array<{ maxOrder: number | null }>>(Prisma.sql`
+    SELECT MAX(queue_order) AS maxOrder
+    FROM word_training_session_items
+    WHERE session_id = ${session.id}
+  `);
+  let queueOrder = Number(maxOrderRow?.maxOrder ?? 0);
+
+  for (const item of items) {
+    queueOrder += 1;
+    await tx.$executeRaw(Prisma.sql`
+      INSERT INTO word_training_session_items (
+        session_id,
+        queue_order,
+        word_key,
+        word,
+        translation,
+        source_type,
+        yandex_cache_id,
+        reason,
+        priority_score,
+        initial_status,
+        initial_stage,
+        phase,
+        state
+      )
+      VALUES (
+        ${session.id},
+        ${queueOrder},
+        ${item.wordKey},
+        ${item.word},
+        ${item.translation},
+        ${item.sourceType},
+        ${item.yandexCacheId},
+        ${item.reason},
+        ${item.priorityScore},
+        ${item.initialStatus},
+        ${item.initialStage},
+        'recognition',
+        'pending'
+      )
+    `);
+  }
+
+  for (const item of items) {
+    for (let round = 0; round < session.phrase_exercises_per_word; round += 1) {
+      const reinforcementType = pickPhraseReinforcementType(item.wordKey, item.priorityScore + round + 1);
+      queueOrder += 1;
+      await tx.$executeRaw(Prisma.sql`
+        INSERT INTO word_training_session_items (
+          session_id,
+          queue_order,
+          word_key,
+          word,
+          translation,
+          source_type,
+          yandex_cache_id,
+          reason,
+          priority_score,
+          initial_status,
+          initial_stage,
+          phase,
+          state,
+          reinforcement_type,
+          attempt_count
+        )
+        VALUES (
+          ${session.id},
+          ${queueOrder},
+          ${item.wordKey},
+          ${item.word},
+          ${item.translation},
+          ${item.sourceType},
+          ${item.yandexCacheId},
+          ${item.reason},
+          ${item.priorityScore + 1 + round},
+          ${item.initialStatus},
+          ${item.initialStage},
+          'reinforcement',
+          'pending',
+          ${reinforcementType},
+          ${round}
+        )
+      `);
+    }
+  }
+
 };
 
 const completeSessionIfNeeded = async (session: SessionRow): Promise<SessionRow> => {
@@ -3140,6 +3280,213 @@ const submitReinforcement = async (
   return buildSessionState(updated);
 };
 
+const markWordKnown = async (
+  userId: string,
+  sessionId: string,
+  input: { wordKey: string },
+) => {
+  await ensureWordTrainingTables();
+  const session = await getSessionById(sessionId, userId);
+  if (!session) throw Object.assign(new Error('Session not found'), { status: 404 });
+  if (session.status !== 'active') throw Object.assign(new Error('Session already finished'), { status: 400 });
+
+  const wordKey = String(input.wordKey ?? '').trim();
+  if (!wordKey) throw Object.assign(new Error('wordKey is required'), { status: 400 });
+  const now = new Date();
+
+  await prisma.$transaction(async (tx) => {
+    const [lockedSession] = await tx.$queryRaw<SessionRow[]>(Prisma.sql`
+      SELECT *
+      FROM word_training_sessions
+      WHERE id = ${sessionId} AND user_id = ${userId}
+      LIMIT 1
+      FOR UPDATE
+    `);
+    if (!lockedSession) {
+      throw Object.assign(new Error('Session not found'), { status: 404 });
+    }
+    if (lockedSession.status !== 'active') {
+      throw Object.assign(new Error('Session already finished'), { status: 400 });
+    }
+
+    const wordRows = await tx.$queryRaw<
+      Array<{
+        word: string;
+        translation: string;
+        yandexCacheId: number | null;
+      }>
+    >(Prisma.sql`
+      SELECT
+        MAX(word) AS word,
+        MAX(translation) AS translation,
+        MAX(yandex_cache_id) AS yandexCacheId
+      FROM word_training_session_items
+      WHERE session_id = ${sessionId} AND word_key = ${wordKey}
+    `);
+    const wordRow = wordRows[0];
+    if (!wordRow?.word) {
+      throw Object.assign(new Error('Word not found in session'), { status: 404 });
+    }
+
+    const [completedForWordRow] = await tx.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+      SELECT COUNT(*) AS total
+      FROM word_training_session_items
+      WHERE session_id = ${sessionId}
+        AND word_key = ${wordKey}
+        AND state = 'completed'
+        AND reinforcement_at IS NOT NULL
+    `);
+    const [pendingForWordRow] = await tx.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+      SELECT COUNT(*) AS total
+      FROM word_training_session_items
+      WHERE session_id = ${sessionId}
+        AND word_key = ${wordKey}
+        AND state = 'pending'
+    `);
+    const shouldCountAsCompleted =
+      Number(completedForWordRow?.total ?? 0) === 0 && Number(pendingForWordRow?.total ?? 0) > 0 ? 1 : 0;
+
+    await tx.$executeRaw(Prisma.sql`
+      UPDATE word_training_session_items
+      SET
+        state = 'completed',
+        phase = 'done',
+        recognition_grade = COALESCE(recognition_grade, 'easy'),
+        recognition_at = COALESCE(recognition_at, ${now}),
+        reinforcement_correct = CASE
+          WHEN reinforcement_type IS NULL THEN reinforcement_correct
+          ELSE COALESCE(reinforcement_correct, 1)
+        END,
+        reinforcement_at = CASE
+          WHEN reinforcement_type IS NULL THEN reinforcement_at
+          ELSE COALESCE(reinforcement_at, ${now})
+        END
+      WHERE session_id = ${sessionId}
+        AND word_key = ${wordKey}
+        AND state = 'pending'
+    `);
+
+    await tx.$executeRaw(Prisma.sql`
+      UPDATE word_training_sessions
+      SET words_completed = words_completed + ${shouldCountAsCompleted}
+      WHERE id = ${sessionId}
+    `);
+
+    const [progress] = await tx.$queryRaw<ProgressRow[]>(Prisma.sql`
+      SELECT *
+      FROM word_training_progress
+      WHERE user_id = ${userId} AND word_key = ${wordKey}
+      LIMIT 1
+      FOR UPDATE
+    `);
+    if (progress) {
+      const masteredDueAt = addDays(now, 30);
+      await tx.$executeRaw(Prisma.sql`
+        UPDATE word_training_progress
+        SET
+          status = 'mastered',
+          srs_stage = GREATEST(srs_stage, 7),
+          interval_days = GREATEST(interval_days, 30),
+          due_at = ${masteredDueAt},
+          next_due_at = ${masteredDueAt},
+          last_reviewed_at = ${now},
+          last_grade = 'easy'
+        WHERE id = ${progress.id}
+      `);
+    }
+
+    if (wordRow.yandexCacheId) {
+      await tx.$executeRaw(Prisma.sql`
+        INSERT INTO user_word_progress (user_id, word_id, status, touches_total, touches_correct, streak, added_to_vocab)
+        VALUES (
+          ${userId},
+          ${wordRow.yandexCacheId},
+          'known',
+          ${TOUCH_GOAL},
+          ${TOUCH_GOAL},
+          ${TOUCH_GOAL},
+          0
+        )
+        ON DUPLICATE KEY UPDATE
+          status = 'known',
+          touches_total = GREATEST(touches_total, ${TOUCH_GOAL}),
+          touches_correct = GREATEST(touches_correct, ${TOUCH_GOAL}),
+          streak = GREATEST(streak, ${TOUCH_GOAL}),
+          updated_at = NOW(3)
+      `);
+    }
+
+    await tx.$executeRaw(Prisma.sql`
+      INSERT INTO word_training_events (session_id, user_id, word_key, event_type, payload)
+      VALUES (
+        ${sessionId},
+        ${userId},
+        ${wordKey},
+        'known_word',
+        JSON_OBJECT('word', ${wordRow.word}, 'translation', ${wordRow.translation})
+      )
+    `);
+  });
+
+  const refreshed = await getSessionById(sessionId, userId);
+  if (!refreshed) throw Object.assign(new Error('Session not found'), { status: 404 });
+  if (refreshed.status !== 'active') {
+    return buildSessionState(refreshed);
+  }
+
+  const existingWordRows = await prisma.$queryRaw<Array<{ wordKey: string }>>(Prisma.sql`
+    SELECT DISTINCT word_key AS wordKey
+    FROM word_training_session_items
+    WHERE session_id = ${sessionId}
+  `);
+  const existingWordKeys = new Set(existingWordRows.map((row) => row.wordKey));
+  const activeWordRows = await prisma.$queryRaw<Array<{ wordKey: string }>>(Prisma.sql`
+    SELECT DISTINCT word_key AS wordKey
+    FROM word_training_session_items
+    WHERE session_id = ${sessionId}
+      AND state = 'pending'
+  `);
+  const activeWordKeys = new Set(activeWordRows.map((row) => row.wordKey));
+  const missingWords = Math.max(0, refreshed.target_words - activeWordKeys.size);
+
+  if (missingWords > 0) {
+    await syncProgressFromSources(userId);
+    if (refreshed.current_block) {
+      await seedProgressFromCurrentBlock(userId, refreshed.current_block);
+    }
+    let progressRows = await loadProgress(userId, refreshed.current_block);
+    let replacements = pickReplacementQueue(progressRows, refreshed.current_block, existingWordKeys, missingWords);
+    if (replacements.length < missingWords) {
+      progressRows = await loadProgress(userId);
+      const fallback = pickReplacementQueue(
+        progressRows,
+        refreshed.current_block,
+        new Set([...existingWordKeys, ...replacements.map((item) => item.wordKey)]),
+        missingWords - replacements.length,
+      );
+      replacements = [...replacements, ...fallback];
+    }
+
+    if (replacements.length > 0) {
+      await prisma.$transaction(async (tx) => {
+        const [lockedSession] = await tx.$queryRaw<SessionRow[]>(Prisma.sql`
+          SELECT *
+          FROM word_training_sessions
+          WHERE id = ${sessionId} AND user_id = ${userId}
+          LIMIT 1
+          FOR UPDATE
+        `);
+        if (!lockedSession || lockedSession.status !== 'active') return;
+        await appendQueueItemsToSession(tx, lockedSession, replacements);
+      });
+    }
+  }
+
+  const updated = await getSessionById(sessionId, userId);
+  if (!updated) throw Object.assign(new Error('Session not found'), { status: 404 });
+  return buildSessionState(updated);
+};
+
 const getCurrentTask = async (userId: string, sessionId: string) => {
   await ensureWordTrainingTables();
   const session = await getSessionById(sessionId, userId);
@@ -3579,6 +3926,7 @@ export const wordTrainingService = {
   getCurrentTask,
   submitRecognition,
   submitReinforcement,
+  markWordKnown,
   finishSession,
   getExamplesByWord: async (
     word: string,
