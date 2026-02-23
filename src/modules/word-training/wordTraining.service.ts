@@ -137,6 +137,36 @@ const isValidGeneratedPhraseEn = (phraseEn: string | null | undefined): boolean 
   return tokens.length >= 2;
 };
 
+const phraseExistsInGeneratedTable = async (
+  yandexCacheId: number | null,
+  word: string,
+  phraseEn: string | null | undefined,
+): Promise<boolean> => {
+  const normalizedPhrase = normalizeText(phraseEn ?? '');
+  if (!isValidGeneratedPhraseEn(normalizedPhrase)) return false;
+  if (yandexCacheId) {
+    const [row] = await prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+      SELECT COUNT(*) AS total
+      FROM word_training_generated_phrases
+      WHERE yandex_cache_id = ${yandexCacheId}
+        AND LOWER(TRIM(phrase_en)) = ${normalizedPhrase.toLowerCase()}
+      LIMIT 1
+    `);
+    if (Number(row?.total ?? 0) > 0) return true;
+  }
+
+  const normalizedWord = normalizeWord(word);
+  if (!normalizedWord) return false;
+  const [fallback] = await prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+    SELECT COUNT(*) AS total
+    FROM word_training_generated_phrases
+    WHERE LOWER(word) = ${normalizedWord}
+      AND LOWER(TRIM(phrase_en)) = ${normalizedPhrase.toLowerCase()}
+    LIMIT 1
+  `);
+  return Number(fallback?.total ?? 0) > 0;
+};
+
 type MissingExercisePayload = {
   type: 'missing';
   sentence: string;
@@ -2310,11 +2340,18 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
 
   let generatedPhrase: GeneratedPhrase | null = null;
   if (item.reinforcement_sentence_en?.trim() && isValidGeneratedPhraseEn(item.reinforcement_sentence_en)) {
+    const existsInGenerated = await phraseExistsInGeneratedTable(
+      item.yandex_cache_id,
+      item.word,
+      item.reinforcement_sentence_en,
+    );
+    if (existsInGenerated) {
     generatedPhrase = {
       phraseEn: item.reinforcement_sentence_en.trim(),
       phraseRu: item.reinforcement_sentence_ru?.trim() || null,
       phraseAudioUrl: item.reinforcement_phrase_audio_url?.trim() || null,
     };
+    }
   } else {
     const excludePhraseEns =
       item.reason === 'retry'
@@ -2365,15 +2402,12 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
         WHERE id = ${item.id}
       `);
     } else {
-      const contextFallback = context?.text?.trim() || '';
-      const phraseEn = isValidGeneratedPhraseEn(contextFallback)
-        ? contextFallback
-        : `I use ${item.word} every day.`;
-      generatedPhrase = {
-        phraseEn,
-        phraseRu: null,
-        phraseAudioUrl: null,
-      };
+      reinforcementType = 'match_pairs';
+      await prisma.$executeRaw(Prisma.sql`
+        UPDATE word_training_session_items
+        SET reinforcement_type = ${reinforcementType}
+        WHERE id = ${item.id}
+      `);
     }
   }
 
