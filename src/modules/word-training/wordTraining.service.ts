@@ -2141,9 +2141,12 @@ const buildMatchPairsExercise = async (
         i.yandex_cache_id AS yandexCacheId
       FROM word_training_session_items i
       WHERE i.session_id = ${sessionId}
-        AND i.phase = 'recognition'
-      GROUP BY i.word_key, i.word, i.translation, i.yandex_cache_id
-      ORDER BY MIN(i.queue_order) ASC
+        AND i.reason <> 'retry'
+        AND i.word IS NOT NULL
+        AND TRIM(i.word) <> ''
+        AND i.translation IS NOT NULL
+        AND TRIM(i.translation) <> ''
+      ORDER BY i.queue_order ASC
       LIMIT 64
     `);
 
@@ -2160,6 +2163,39 @@ const buildMatchPairsExercise = async (
       seenTranslationsSession.add(tk);
       base.push({ word, translation, yandexCacheId: row.yandexCacheId ? Number(row.yandexCacheId) : null });
       if (base.length >= 5) break;
+    }
+
+    if (base.length < 5) {
+      const retryPairs = await prisma.$queryRaw<
+        Array<{ word: string; translation: string; yandexCacheId: number | null }>
+      >(Prisma.sql`
+        SELECT
+          i.word AS word,
+          i.translation AS translation,
+          i.yandex_cache_id AS yandexCacheId
+        FROM word_training_session_items i
+        WHERE i.session_id = ${sessionId}
+          AND i.reason = 'retry'
+          AND i.word IS NOT NULL
+          AND TRIM(i.word) <> ''
+          AND i.translation IS NOT NULL
+          AND TRIM(i.translation) <> ''
+        ORDER BY i.queue_order ASC
+        LIMIT 64
+      `);
+
+      for (const row of retryPairs) {
+        const word = normalizeText(row.word);
+        const translation = normalizeText(row.translation);
+        const wk = normalizeWord(word);
+        const tk = normalizeOptionText(translation);
+        if (!word || !translation || !wk || !tk) continue;
+        if (seenWordsSession.has(wk) || seenTranslationsSession.has(tk)) continue;
+        seenWordsSession.add(wk);
+        seenTranslationsSession.add(tk);
+        base.push({ word, translation, yandexCacheId: row.yandexCacheId ? Number(row.yandexCacheId) : null });
+        if (base.length >= 5) break;
+      }
     }
   }
 
@@ -2347,13 +2383,15 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
       item.reinforcement_sentence_en,
     );
     if (existsInGenerated) {
-    generatedPhrase = {
-      phraseEn: item.reinforcement_sentence_en.trim(),
-      phraseRu: item.reinforcement_sentence_ru?.trim() || null,
-      phraseAudioUrl: item.reinforcement_phrase_audio_url?.trim() || null,
-    };
+      generatedPhrase = {
+        phraseEn: item.reinforcement_sentence_en.trim(),
+        phraseRu: item.reinforcement_sentence_ru?.trim() || null,
+        phraseAudioUrl: item.reinforcement_phrase_audio_url?.trim() || null,
+      };
     }
-  } else {
+  }
+
+  if (!generatedPhrase) {
     const excludePhraseEns =
       item.reason === 'retry'
         ? []
@@ -2385,6 +2423,12 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     }
   }
 
+  if (!generatedPhrase) {
+    generatedPhrase = await getGeneratedPhraseForWord(item.yandex_cache_id, item.word, {
+      excludePhraseEns: [],
+    });
+  }
+
   if ((reinforcementType === 'missing' || reinforcementType === 'audio_assemble') && !generatedPhrase) {
     const [matchPairsRow] = await prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
       SELECT COUNT(*) AS total
@@ -2403,12 +2447,18 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
         WHERE id = ${item.id}
       `);
     } else {
-      reinforcementType = 'match_pairs';
+      // Phrase for this word is not available in generated table.
+      // Do not duplicate match_pairs: skip this reinforcement item.
       await prisma.$executeRaw(Prisma.sql`
         UPDATE word_training_session_items
-        SET reinforcement_type = ${reinforcementType}
+        SET
+          state = 'skipped',
+          phase = 'done',
+          reinforcement_at = ${new Date()},
+          updated_at = ${new Date()}
         WHERE id = ${item.id}
       `);
+      return null;
     }
   }
 
@@ -2637,7 +2687,7 @@ const buildSessionState = async (session: SessionRow) => {
     };
   }
 
-  const item = await getCurrentItem(fresh.id);
+  let item = await getCurrentItem(fresh.id);
   const [pendingPhase] = await prisma.$queryRaw<Array<{ pendingRetry: bigint; pendingRegular: bigint }>>(Prisma.sql`
     SELECT
       SUM(CASE WHEN state = 'pending' AND reason = 'retry' THEN 1 ELSE 0 END) AS pendingRetry,
@@ -2647,7 +2697,18 @@ const buildSessionState = async (session: SessionRow) => {
   `);
   const retryPhaseActive =
     Number(pendingPhase?.pendingRetry ?? 0) > 0 && Number(pendingPhase?.pendingRegular ?? 0) === 0;
-  const currentTask = item ? await mapTask(fresh.user_id, fresh.id, item) : null;
+  let currentTask: Awaited<ReturnType<typeof mapTask>> | null = null;
+  let guard = 0;
+  while (item && guard < 30) {
+    // mapTask can skip broken reinforcement items (no generated phrase) and return null.
+    const mapped = await mapTask(fresh.user_id, fresh.id, item);
+    if (mapped) {
+      currentTask = mapped;
+      break;
+    }
+    item = await getCurrentItem(fresh.id);
+    guard += 1;
+  }
   const sessionFlow = await buildSessionFlowState(fresh.id, currentTask, retryPhaseActive, false);
   return {
     session: {
