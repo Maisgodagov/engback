@@ -2371,7 +2371,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
         : `I use ${item.word} every day.`;
       generatedPhrase = {
         phraseEn,
-        phraseRu: item.translation,
+        phraseRu: null,
         phraseAudioUrl: null,
       };
     }
@@ -2381,7 +2381,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
   let reinforcement: MissingExercisePayload | AudioAssembleExercisePayload | MatchPairsExercisePayload;
   if (reinforcementType === 'missing') {
     const reinforcementSentence = generatedPhrase!.phraseEn;
-    const reinforcementSentenceTranslation = generatedPhrase!.phraseRu || item.translation;
+    const reinforcementSentenceTranslation = generatedPhrase!.phraseRu || null;
     reinforcement = await buildMissingExercise(
       reinforcementSentence,
       reinforcementSentenceTranslation,
@@ -2390,7 +2390,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     );
   } else if (reinforcementType === 'audio_assemble') {
     const reinforcementSentence = generatedPhrase!.phraseEn;
-    const reinforcementSentenceTranslation = generatedPhrase!.phraseRu || item.translation;
+    const reinforcementSentenceTranslation = generatedPhrase!.phraseRu || null;
     reinforcement = await buildAudioAssembleExercise(
       reinforcementSentence,
       reinforcementSentenceTranslation,
