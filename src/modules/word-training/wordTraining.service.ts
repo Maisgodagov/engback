@@ -3550,24 +3550,6 @@ const markWordKnown = async (
       throw Object.assign(new Error('Word not found in session'), { status: 404 });
     }
 
-    const [completedForWordRow] = await tx.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
-      SELECT COUNT(*) AS total
-      FROM word_training_session_items
-      WHERE session_id = ${sessionId}
-        AND word_key = ${wordKey}
-        AND state = 'completed'
-        AND reinforcement_at IS NOT NULL
-    `);
-    const [pendingForWordRow] = await tx.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
-      SELECT COUNT(*) AS total
-      FROM word_training_session_items
-      WHERE session_id = ${sessionId}
-        AND word_key = ${wordKey}
-        AND state = 'pending'
-    `);
-    const shouldCountAsCompleted =
-      Number(completedForWordRow?.total ?? 0) === 0 && Number(pendingForWordRow?.total ?? 0) > 0 ? 1 : 0;
-
     await tx.$executeRaw(Prisma.sql`
       UPDATE word_training_session_items
       SET
@@ -3586,12 +3568,6 @@ const markWordKnown = async (
       WHERE session_id = ${sessionId}
         AND word_key = ${wordKey}
         AND state = 'pending'
-    `);
-
-    await tx.$executeRaw(Prisma.sql`
-      UPDATE word_training_sessions
-      SET words_completed = words_completed + ${shouldCountAsCompleted}
-      WHERE id = ${sessionId}
     `);
 
     const [progress] = await tx.$queryRaw<ProgressRow[]>(Prisma.sql`
@@ -3653,9 +3629,8 @@ const markWordKnown = async (
 
   const refreshed = await getSessionById(sessionId, userId);
   if (!refreshed) throw Object.assign(new Error('Session not found'), { status: 404 });
-  if (refreshed.status !== 'active') {
-    return buildSessionState(refreshed);
-  }
+  const refreshedAfterCompleteCheck = await completeSessionIfNeeded(refreshed);
+  if (refreshedAfterCompleteCheck.status !== 'active') return buildSessionState(refreshedAfterCompleteCheck);
 
   const existingWordRows = await prisma.$queryRaw<Array<{ wordKey: string }>>(Prisma.sql`
     SELECT DISTINCT word_key AS wordKey
@@ -3670,21 +3645,25 @@ const markWordKnown = async (
       AND state = 'pending'
   `);
   const activeWordKeys = new Set(activeWordRows.map((row) => row.wordKey));
-  const remainingTargetWords = Math.max(0, refreshed.target_words - refreshed.words_completed);
-  const missingWords = Math.max(0, remainingTargetWords - activeWordKeys.size);
+  const missingWords = Math.max(0, refreshed.target_words - activeWordKeys.size);
 
   if (missingWords > 0) {
     await syncProgressFromSources(userId);
-    if (refreshed.current_block) {
-      await seedProgressFromCurrentBlock(userId, refreshed.current_block);
+    if (refreshedAfterCompleteCheck.current_block) {
+      await seedProgressFromCurrentBlock(userId, refreshedAfterCompleteCheck.current_block);
     }
-    let progressRows = await loadProgress(userId, refreshed.current_block);
-    let replacements = pickReplacementQueue(progressRows, refreshed.current_block, existingWordKeys, missingWords);
+    let progressRows = await loadProgress(userId, refreshedAfterCompleteCheck.current_block);
+    let replacements = pickReplacementQueue(
+      progressRows,
+      refreshedAfterCompleteCheck.current_block,
+      existingWordKeys,
+      missingWords,
+    );
     if (replacements.length < missingWords) {
       progressRows = await loadProgress(userId);
       const fallback = pickReplacementQueue(
         progressRows,
-        refreshed.current_block,
+        refreshedAfterCompleteCheck.current_block,
         new Set([...existingWordKeys, ...replacements.map((item) => item.wordKey)]),
         missingWords - replacements.length,
       );
