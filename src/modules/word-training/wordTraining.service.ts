@@ -130,6 +130,13 @@ type GeneratedPhrase = {
   phraseAudioUrl: string | null;
 };
 
+const isValidGeneratedPhraseEn = (phraseEn: string | null | undefined): boolean => {
+  const value = normalizeText(phraseEn ?? '');
+  if (!value) return false;
+  const tokens = buildSentenceTokens(value);
+  return tokens.length >= 2;
+};
+
 type MissingExercisePayload = {
   type: 'missing';
   sentence: string;
@@ -1886,7 +1893,7 @@ const getGeneratedPhraseForWord = async (
   const hasExclude = excludePhraseEns.length > 0;
 
   if (yandexCacheId) {
-    const [row] = await prisma.$queryRaw<
+    const rows = await prisma.$queryRaw<
       Array<{ phraseEn: string; phraseRu: string | null; phraseAudioUrl: string | null }>
     >(Prisma.sql`
       SELECT phrase_en AS phraseEn, phrase_ru AS phraseRu, phrase_audio_url AS phraseAudioUrl
@@ -1894,8 +1901,9 @@ const getGeneratedPhraseForWord = async (
       WHERE yandex_cache_id = ${yandexCacheId}
         ${hasExclude ? Prisma.sql`AND phrase_en NOT IN (${Prisma.join(excludePhraseEns)})` : Prisma.empty}
       ORDER BY RAND()
-      LIMIT 1
+      LIMIT 40
     `);
+    const row = rows.find((candidate) => isValidGeneratedPhraseEn(candidate?.phraseEn));
     if (row?.phraseEn?.trim()) {
       return {
         phraseEn: row.phraseEn.trim(),
@@ -1908,7 +1916,7 @@ const getGeneratedPhraseForWord = async (
   const normalizedWord = normalizeWord(word);
   if (!normalizedWord) return null;
 
-  const [fallback] = await prisma.$queryRaw<
+  const fallbackRows = await prisma.$queryRaw<
     Array<{ phraseEn: string; phraseRu: string | null; phraseAudioUrl: string | null }>
   >(Prisma.sql`
     SELECT phrase_en AS phraseEn, phrase_ru AS phraseRu, phrase_audio_url AS phraseAudioUrl
@@ -1916,8 +1924,9 @@ const getGeneratedPhraseForWord = async (
     WHERE LOWER(word) = ${normalizedWord}
       ${hasExclude ? Prisma.sql`AND phrase_en NOT IN (${Prisma.join(excludePhraseEns)})` : Prisma.empty}
     ORDER BY RAND()
-    LIMIT 1
+    LIMIT 40
   `);
+  const fallback = fallbackRows.find((candidate) => isValidGeneratedPhraseEn(candidate?.phraseEn));
 
   if (!fallback?.phraseEn?.trim()) return null;
   return {
@@ -2298,7 +2307,7 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
   }
 
   let generatedPhrase: GeneratedPhrase | null = null;
-  if (item.reinforcement_sentence_en?.trim()) {
+  if (item.reinforcement_sentence_en?.trim() && isValidGeneratedPhraseEn(item.reinforcement_sentence_en)) {
     generatedPhrase = {
       phraseEn: item.reinforcement_sentence_en.trim(),
       phraseRu: item.reinforcement_sentence_ru?.trim() || null,
@@ -2336,11 +2345,20 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
     }
   }
 
-  const reinforcementSentence = generatedPhrase?.phraseEn || context?.text || `${item.word} ${item.translation}`;
-  const reinforcementSentenceTranslation = generatedPhrase?.phraseRu || item.translation;
+  if ((reinforcementType === 'missing' || reinforcementType === 'audio_assemble') && !generatedPhrase) {
+    reinforcementType = 'match_pairs';
+    await prisma.$executeRaw(Prisma.sql`
+      UPDATE word_training_session_items
+      SET reinforcement_type = ${reinforcementType}
+      WHERE id = ${item.id}
+    `);
+  }
+
   const reinforcementAudioUrl = generatedPhrase?.phraseAudioUrl || wordPronunciationAudioUrl;
   let reinforcement: MissingExercisePayload | AudioAssembleExercisePayload | MatchPairsExercisePayload;
   if (reinforcementType === 'missing') {
+    const reinforcementSentence = generatedPhrase!.phraseEn;
+    const reinforcementSentenceTranslation = generatedPhrase!.phraseRu || item.translation;
     reinforcement = await buildMissingExercise(
       reinforcementSentence,
       reinforcementSentenceTranslation,
@@ -2348,6 +2366,8 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
       reinforcementAudioUrl,
     );
   } else if (reinforcementType === 'audio_assemble') {
+    const reinforcementSentence = generatedPhrase!.phraseEn;
+    const reinforcementSentenceTranslation = generatedPhrase!.phraseRu || item.translation;
     reinforcement = await buildAudioAssembleExercise(
       reinforcementSentence,
       reinforcementSentenceTranslation,
