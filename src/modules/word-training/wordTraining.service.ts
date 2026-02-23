@@ -2132,52 +2132,54 @@ const buildMatchPairsExercise = async (
     }
   }
 
-  const distractors = await prisma.$queryRaw<
-    Array<{ word: string; translation: string; yandexCacheId: number | null }>
-  >(Prisma.sql`
-    SELECT p.word AS word, p.translation AS translation, p.yandex_cache_id AS yandexCacheId
-    FROM word_training_progress p
-    INNER JOIN yandex_dictionary_cache ydc ON ydc.id = p.yandex_cache_id
-    LEFT JOIN exercise_excluded_words ex ON ex.word_id = p.yandex_cache_id
-    WHERE p.user_id = ${userId}
-      AND p.word_key <> ${current.wordKey}
-      AND p.word IS NOT NULL
-      AND TRIM(p.word) <> ''
-      AND p.translation IS NOT NULL
-      AND TRIM(p.translation) <> ''
-      AND ydc.cefr_level IS NOT NULL
-      AND TRIM(ydc.cefr_level) <> ''
-      AND ex.word_id IS NULL
-    ORDER BY RAND()
-    LIMIT 40
-  `);
+  if (!sessionId) {
+    const distractors = await prisma.$queryRaw<
+      Array<{ word: string; translation: string; yandexCacheId: number | null }>
+    >(Prisma.sql`
+      SELECT p.word AS word, p.translation AS translation, p.yandex_cache_id AS yandexCacheId
+      FROM word_training_progress p
+      INNER JOIN yandex_dictionary_cache ydc ON ydc.id = p.yandex_cache_id
+      LEFT JOIN exercise_excluded_words ex ON ex.word_id = p.yandex_cache_id
+      WHERE p.user_id = ${userId}
+        AND p.word_key <> ${current.wordKey}
+        AND p.word IS NOT NULL
+        AND TRIM(p.word) <> ''
+        AND p.translation IS NOT NULL
+        AND TRIM(p.translation) <> ''
+        AND ydc.cefr_level IS NOT NULL
+        AND TRIM(ydc.cefr_level) <> ''
+        AND ex.word_id IS NULL
+      ORDER BY RAND()
+      LIMIT 40
+    `);
 
-  const seenWords = new Set<string>([normalizeWord(current.word)]);
-  const seenTranslations = new Set<string>([normalizeOptionText(current.translation)]);
+    const seenWords = new Set<string>([normalizeWord(current.word)]);
+    const seenTranslations = new Set<string>([normalizeOptionText(current.translation)]);
 
-  for (const row of distractors) {
-    const word = normalizeText(row.word);
-    const translation = normalizeText(row.translation);
-    const wk = normalizeWord(word);
-    const tk = normalizeOptionText(translation);
-    if (!word || !translation || !wk || !tk) continue;
-    if (seenWords.has(wk) || seenTranslations.has(tk)) continue;
-    seenWords.add(wk);
-    seenTranslations.add(tk);
-    base.push({ word, translation, yandexCacheId: row.yandexCacheId ? Number(row.yandexCacheId) : null });
-    if (base.length >= 5) break;
-  }
-
-  if (base.length < 5) {
-    const fallback = await getFallbackPairsFromYandex(normalizeWord(current.word), 5 - base.length);
-    for (const row of fallback) {
-      const wk = normalizeWord(row.word);
-      const tk = normalizeOptionText(row.translation);
-      if (!wk || !tk || seenWords.has(wk) || seenTranslations.has(tk)) continue;
+    for (const row of distractors) {
+      const word = normalizeText(row.word);
+      const translation = normalizeText(row.translation);
+      const wk = normalizeWord(word);
+      const tk = normalizeOptionText(translation);
+      if (!word || !translation || !wk || !tk) continue;
+      if (seenWords.has(wk) || seenTranslations.has(tk)) continue;
       seenWords.add(wk);
       seenTranslations.add(tk);
-      base.push(row);
+      base.push({ word, translation, yandexCacheId: row.yandexCacheId ? Number(row.yandexCacheId) : null });
       if (base.length >= 5) break;
+    }
+
+    if (base.length < 5) {
+      const fallback = await getFallbackPairsFromYandex(normalizeWord(current.word), 5 - base.length);
+      for (const row of fallback) {
+        const wk = normalizeWord(row.word);
+        const tk = normalizeOptionText(row.translation);
+        if (!wk || !tk || seenWords.has(wk) || seenTranslations.has(tk)) continue;
+        seenWords.add(wk);
+        seenTranslations.add(tk);
+        base.push(row);
+        if (base.length >= 5) break;
+      }
     }
   }
 
@@ -2346,12 +2348,33 @@ const mapTask = async (userId: string, sessionId: string, item: SessionItemRow) 
   }
 
   if ((reinforcementType === 'missing' || reinforcementType === 'audio_assemble') && !generatedPhrase) {
-    reinforcementType = 'match_pairs';
-    await prisma.$executeRaw(Prisma.sql`
-      UPDATE word_training_session_items
-      SET reinforcement_type = ${reinforcementType}
-      WHERE id = ${item.id}
+    const [matchPairsRow] = await prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+      SELECT COUNT(*) AS total
+      FROM word_training_session_items
+      WHERE session_id = ${sessionId}
+        AND reinforcement_type = 'match_pairs'
+        AND id <> ${item.id}
     `);
+    const hasMatchPairsAlready = Number(matchPairsRow?.total ?? 0) > 0;
+
+    if (!hasMatchPairsAlready) {
+      reinforcementType = 'match_pairs';
+      await prisma.$executeRaw(Prisma.sql`
+        UPDATE word_training_session_items
+        SET reinforcement_type = ${reinforcementType}
+        WHERE id = ${item.id}
+      `);
+    } else {
+      const contextFallback = context?.text?.trim() || '';
+      const phraseEn = isValidGeneratedPhraseEn(contextFallback)
+        ? contextFallback
+        : `I use ${item.word} every day.`;
+      generatedPhrase = {
+        phraseEn,
+        phraseRu: item.translation,
+        phraseAudioUrl: null,
+      };
+    }
   }
 
   const reinforcementAudioUrl = generatedPhrase?.phraseAudioUrl || wordPronunciationAudioUrl;
