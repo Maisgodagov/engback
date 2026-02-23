@@ -275,56 +275,56 @@ const SOURCE_LIMIT = 500;
 const MAX_RETRY_ATTEMPTS = 2;
 const CEFR_LEVELS: Array<'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2'> = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 const CEFR_BLOCK_TITLES: Record<string, string> = {
-  A1_1: 'Стартовый набор I',
-  A1_2: 'Стартовый набор II',
-  A1_3: 'Стартовый набор III',
-  A1_4: 'Базовый актив I',
-  A1_5: 'Базовый актив II',
-  A1_6: 'Базовый актив III',
-  A1_7: 'Завершение фундамента I',
-  A1_8: 'Завершение фундамента II',
-  A1_9: 'Завершение фундамента III',
+  A1_1: 'РЎС‚Р°СЂС‚РѕРІС‹Р№ РЅР°Р±РѕСЂ I',
+  A1_2: 'РЎС‚Р°СЂС‚РѕРІС‹Р№ РЅР°Р±РѕСЂ II',
+  A1_3: 'РЎС‚Р°СЂС‚РѕРІС‹Р№ РЅР°Р±РѕСЂ III',
+  A1_4: 'Р‘Р°Р·РѕРІС‹Р№ Р°РєС‚РёРІ I',
+  A1_5: 'Р‘Р°Р·РѕРІС‹Р№ Р°РєС‚РёРІ II',
+  A1_6: 'Р‘Р°Р·РѕРІС‹Р№ Р°РєС‚РёРІ III',
+  A1_7: 'Р—Р°РІРµСЂС€РµРЅРёРµ С„СѓРЅРґР°РјРµРЅС‚Р° I',
+  A1_8: 'Р—Р°РІРµСЂС€РµРЅРёРµ С„СѓРЅРґР°РјРµРЅС‚Р° II',
+  A1_9: 'Р—Р°РІРµСЂС€РµРЅРёРµ С„СѓРЅРґР°РјРµРЅС‚Р° III',
 
-  A2_1: 'Бытовой минимум I',
-  A2_2: 'Бытовой минимум II',
-  A2_3: 'Бытовой минимум III',
-  A2_4: 'Расширение словаря I',
-  A2_5: 'Расширение словаря II',
-  A2_6: 'Расширение словаря III',
-  A2_7: 'Уверенный диалог I',
-  A2_8: 'Уверенный диалог II',
-  A2_9: 'Уверенный диалог II',
+  A2_1: 'Р‘С‹С‚РѕРІРѕР№ РјРёРЅРёРјСѓРј I',
+  A2_2: 'Р‘С‹С‚РѕРІРѕР№ РјРёРЅРёРјСѓРј II',
+  A2_3: 'Р‘С‹С‚РѕРІРѕР№ РјРёРЅРёРјСѓРј III',
+  A2_4: 'Р Р°СЃС€РёСЂРµРЅРёРµ СЃР»РѕРІР°СЂСЏ I',
+  A2_5: 'Р Р°СЃС€РёСЂРµРЅРёРµ СЃР»РѕРІР°СЂСЏ II',
+  A2_6: 'Р Р°СЃС€РёСЂРµРЅРёРµ СЃР»РѕРІР°СЂСЏ III',
+  A2_7: 'РЈРІРµСЂРµРЅРЅС‹Р№ РґРёР°Р»РѕРі I',
+  A2_8: 'РЈРІРµСЂРµРЅРЅС‹Р№ РґРёР°Р»РѕРі II',
+  A2_9: 'РЈРІРµСЂРµРЅРЅС‹Р№ РґРёР°Р»РѕРі II',
 
-  B1_1: 'Свободный выбор I',
-  B1_2: 'Свободный выбор II',
-  B1_3: 'Свободный выбор III',
-  B1_4: 'Основа понимания I',
-  B1_5: 'Основа понимания II',
-  B1_6: 'Основа понимания III',
-  B1_7: 'Пороговый уровень (Экватор)',
-  B1_8: 'Пороговый уровень (Экватор)',
+  B1_1: 'РЎРІРѕР±РѕРґРЅС‹Р№ РІС‹Р±РѕСЂ I',
+  B1_2: 'РЎРІРѕР±РѕРґРЅС‹Р№ РІС‹Р±РѕСЂ II',
+  B1_3: 'РЎРІРѕР±РѕРґРЅС‹Р№ РІС‹Р±РѕСЂ III',
+  B1_4: 'РћСЃРЅРѕРІР° РїРѕРЅРёРјР°РЅРёСЏ I',
+  B1_5: 'РћСЃРЅРѕРІР° РїРѕРЅРёРјР°РЅРёСЏ II',
+  B1_6: 'РћСЃРЅРѕРІР° РїРѕРЅРёРјР°РЅРёСЏ III',
+  B1_7: 'РџРѕСЂРѕРіРѕРІС‹Р№ СѓСЂРѕРІРµРЅСЊ (Р­РєРІР°С‚РѕСЂ)',
+  B1_8: 'РџРѕСЂРѕРіРѕРІС‹Р№ СѓСЂРѕРІРµРЅСЊ (Р­РєРІР°С‚РѕСЂ)',
 
-  B2_1: 'Акцент на деталях I',
-  B2_2: 'Акцент на деталях II',
-  B2_3: 'Акцент на деталях III',
-  B2_4: 'Мастерство контекста I',
-  B2_5: 'Мастерство контекста II',
-  B2_6: 'Мастерство контекста III',
-  B2_7: 'Продвинутый вокабуляр I',
-  B2_8: 'Продвинутый вокабуляр II',
-  B2_9: 'Продвинутый вокабуляр III',
-  B2_10: 'Продвинутый вокабуляр IV',
-  B2_11: 'Продвинутый вокабуляр V',
-  B2_12: 'Продвинутый вокабуляр VI',
+  B2_1: 'РђРєС†РµРЅС‚ РЅР° РґРµС‚Р°Р»СЏС… I',
+  B2_2: 'РђРєС†РµРЅС‚ РЅР° РґРµС‚Р°Р»СЏС… II',
+  B2_3: 'РђРєС†РµРЅС‚ РЅР° РґРµС‚Р°Р»СЏС… III',
+  B2_4: 'РњР°СЃС‚РµСЂСЃС‚РІРѕ РєРѕРЅС‚РµРєСЃС‚Р° I',
+  B2_5: 'РњР°СЃС‚РµСЂСЃС‚РІРѕ РєРѕРЅС‚РµРєСЃС‚Р° II',
+  B2_6: 'РњР°СЃС‚РµСЂСЃС‚РІРѕ РєРѕРЅС‚РµРєСЃС‚Р° III',
+  B2_7: 'РџСЂРѕРґРІРёРЅСѓС‚С‹Р№ РІРѕРєР°Р±СѓР»СЏСЂ I',
+  B2_8: 'РџСЂРѕРґРІРёРЅСѓС‚С‹Р№ РІРѕРєР°Р±СѓР»СЏСЂ II',
+  B2_9: 'РџСЂРѕРґРІРёРЅСѓС‚С‹Р№ РІРѕРєР°Р±СѓР»СЏСЂ III',
+  B2_10: 'РџСЂРѕРґРІРёРЅСѓС‚С‹Р№ РІРѕРєР°Р±СѓР»СЏСЂ IV',
+  B2_11: 'РџСЂРѕРґРІРёРЅСѓС‚С‹Р№ РІРѕРєР°Р±СѓР»СЏСЂ V',
+  B2_12: 'РџСЂРѕРґРІРёРЅСѓС‚С‹Р№ РІРѕРєР°Р±СѓР»СЏСЂ VI',
 
-  C1_1: 'Интеллектуальный запас I',
-  C1_2: 'Интеллектуальный запас II',
-  C1_3: 'Интеллектуальный запас III',
-  C1_4: 'Смысловые нюансы I',
-  C1_5: 'Смысловые нюансы II',
-  C1_6: 'Смысловые нюансы III',
-  C1_7: 'Вершина мастерства (Native Level)',
-  C1_8: 'Вершина мастерства (Native Level)',
+  C1_1: 'РРЅС‚РµР»Р»РµРєС‚СѓР°Р»СЊРЅС‹Р№ Р·Р°РїР°СЃ I',
+  C1_2: 'РРЅС‚РµР»Р»РµРєС‚СѓР°Р»СЊРЅС‹Р№ Р·Р°РїР°СЃ II',
+  C1_3: 'РРЅС‚РµР»Р»РµРєС‚СѓР°Р»СЊРЅС‹Р№ Р·Р°РїР°СЃ III',
+  C1_4: 'РЎРјС‹СЃР»РѕРІС‹Рµ РЅСЋР°РЅСЃС‹ I',
+  C1_5: 'РЎРјС‹СЃР»РѕРІС‹Рµ РЅСЋР°РЅСЃС‹ II',
+  C1_6: 'РЎРјС‹СЃР»РѕРІС‹Рµ РЅСЋР°РЅСЃС‹ III',
+  C1_7: 'Р’РµСЂС€РёРЅР° РјР°СЃС‚РµСЂСЃС‚РІР° (Native Level)',
+  C1_8: 'Р’РµСЂС€РёРЅР° РјР°СЃС‚РµСЂСЃС‚РІР° (Native Level)',
 };
 
 let tablesReady = false;
@@ -352,7 +352,7 @@ const getCefrBlockTitle = (block: string | null | undefined): string | null => {
   if (CEFR_BLOCK_TITLES[key]) return CEFR_BLOCK_TITLES[key];
   const match = key.match(/^([A-Z]\d)_(\d+)$/);
   if (!match) return null;
-  return `Блок ${match[1]}-${match[2]}`;
+  return `Р‘Р»РѕРє ${match[1]}-${match[2]}`;
 };
 
 const parseBlockOrder = (block: string | null | undefined): number => {
@@ -2536,12 +2536,12 @@ const buildSessionFlowState = async (
   `);
 
   const stages: SessionFlowStage[] = [
-    { key: 'intro', label: 'Знакомство', total: 0, completed: 0 },
-    { key: 'recognition', label: 'Узнавание', total: 0, completed: 0 },
-    { key: 'matching', label: 'Сопоставление', total: 0, completed: 0 },
-    { key: 'deep_work', label: 'Контекст и аудирование', total: 0, completed: 0 },
-    { key: 'retry', label: 'Закрепляем ошибки', total: 0, completed: 0 },
-    { key: 'result', label: 'Результат', total: 1, completed: isCompleted ? 1 : 0 },
+    { key: 'intro', label: 'Р—РЅР°РєРѕРјСЃС‚РІРѕ', total: 0, completed: 0 },
+    { key: 'recognition', label: 'РЈР·РЅР°РІР°РЅРёРµ', total: 0, completed: 0 },
+    { key: 'matching', label: 'РЎРѕРїРѕСЃС‚Р°РІР»РµРЅРёРµ', total: 0, completed: 0 },
+    { key: 'deep_work', label: 'РљРѕРЅС‚РµРєСЃС‚ Рё Р°СѓРґРёСЂРѕРІР°РЅРёРµ', total: 0, completed: 0 },
+    { key: 'retry', label: 'Р—Р°РєСЂРµРїР»СЏРµРј РѕС€РёР±РєРё', total: 0, completed: 0 },
+    { key: 'result', label: 'Р РµР·СѓР»СЊС‚Р°С‚', total: 1, completed: isCompleted ? 1 : 0 },
   ];
 
   const byKey = new Map<SessionFlowStageKey, SessionFlowStage>(stages.map((stage) => [stage.key, stage]));
@@ -2730,7 +2730,7 @@ const buildSessionState = async (session: SessionRow) => {
     introQueue: await getIntroQueue(fresh.id),
     sessionFlow,
     retryPhase: retryPhaseActive,
-    retryPhaseTitle: retryPhaseActive ? 'Закрепляем ошибки' : null,
+    retryPhaseTitle: retryPhaseActive ? 'Р—Р°РєСЂРµРїР»СЏРµРј РѕС€РёР±РєРё' : null,
   };
 };
 
@@ -2863,18 +2863,53 @@ const startSession = async (
   const blockState = await resolveUserCurrentBlock(userId, user?.level);
   await seedProgressFromCurrentBlock(userId, blockState.currentBlock);
   const progressRows = await loadProgress(userId, blockState.currentBlock);
-  if (!progressRows.length) {
-    throw Object.assign(new Error('Нет слов для тренировки. Добавьте слова в словарь или откройте переводы в видео.'), {
-      status: 400,
-    });
-  }
 
   const requestedTarget = clamp(
     targetWords ?? SESSION_TARGET_DEFAULT,
     SESSION_TARGET_MIN,
     SESSION_TARGET_MAX,
   );
-  const queueBuild = buildDailyQueue(progressRows, requestedTarget, blockState.currentBlock);
+  let queueBuild = buildDailyQueue(progressRows, requestedTarget, blockState.currentBlock);
+
+  if (queueBuild.queue.length < requestedTarget) {
+    const allBlocks = await getAvailableBlocks();
+    const currentIdx = allBlocks.findIndex((b) => b.block === blockState.currentBlock);
+    if (currentIdx >= 0) {
+      const seenKeys = new Set(queueBuild.queue.map((item) => item.wordKey));
+      const supplementalRows: ProgressRow[] = [];
+      for (let i = currentIdx + 1; i < allBlocks.length; i += 1) {
+        const block = allBlocks[i].block;
+        await seedProgressFromCurrentBlock(userId, block);
+        const rows = await loadProgress(userId, block);
+        for (const row of rows) {
+          if (seenKeys.has(row.word_key)) continue;
+          seenKeys.add(row.word_key);
+          supplementalRows.push(row);
+        }
+        if (supplementalRows.length >= requestedTarget * 8) break;
+      }
+
+      const missing = Math.max(0, requestedTarget - queueBuild.queue.length);
+      if (missing > 0 && supplementalRows.length > 0) {
+        const topUp = pickReplacementQueue(
+          supplementalRows,
+          blockState.currentBlock,
+          new Set(queueBuild.queue.map((item) => item.wordKey)),
+          missing,
+        );
+        if (topUp.length > 0) {
+          const merged = [...queueBuild.queue, ...topUp].slice(0, requestedTarget);
+          queueBuild = {
+            queue: merged,
+            reviewCount: merged.filter((it) => it.reason === 'review').length,
+            mistakeCount: merged.filter((it) => it.reason === 'mistake').length,
+            newCount: merged.filter((it) => it.reason === 'new').length,
+          };
+        }
+      }
+    }
+  }
+
   const maxUniqueWords = clamp(preferences?.maxUniqueWords ?? 5, 1, 5);
   queueBuild.queue = queueBuild.queue.slice(0, maxUniqueWords);
   queueBuild.queue = shuffleArray(queueBuild.queue);
@@ -2887,7 +2922,7 @@ const startSession = async (
     PHRASE_EXERCISES_PER_WORD_MAX,
   );
   if (!queueBuild.queue.length) {
-    throw Object.assign(new Error('Сегодня нет слов для тренировки. Возвращайтесь позже.'), {
+    throw Object.assign(new Error('Нет слов для тренировки. Добавьте слова в словарь или откройте переводы в видео.'), {
       status: 400,
     });
   }
