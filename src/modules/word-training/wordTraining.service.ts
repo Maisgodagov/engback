@@ -326,7 +326,6 @@ const CEFR_BLOCK_TITLES: Record<string, string> = {
   C1_7: 'Р’РµСЂС€РёРЅР° РјР°СЃС‚РµСЂСЃС‚РІР° (Native Level)',
   C1_8: 'Р’РµСЂС€РёРЅР° РјР°СЃС‚РµСЂСЃС‚РІР° (Native Level)',
 };
-
 let tablesReady = false;
 
 const clamp = (value: number, min: number, max: number): number =>
@@ -342,6 +341,17 @@ const normalizeWord = (value: string): string =>
     .trim();
 
 const normalizeText = (value: string): string => value.trim().replace(/\s+/g, ' ');
+const decodeMojibakeIfNeeded = (value: string): string => {
+  const raw = String(value ?? '');
+  if (!raw) return raw;
+  // Heuristic: common mojibake pattern when UTF-8 text was decoded as Latin-1/CP1251.
+  if (!/[РЎЃ]/.test(raw)) return raw;
+  try {
+    return Buffer.from(raw, 'latin1').toString('utf8');
+  } catch {
+    return raw;
+  }
+};
 const normalizeCefrLevel = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim().toUpperCase();
   return CEFR_LEVELS.includes(normalized as (typeof CEFR_LEVELS)[number]) ? normalized : null;
@@ -349,10 +359,10 @@ const normalizeCefrLevel = (value: string | null | undefined): string | null => 
 const getCefrBlockTitle = (block: string | null | undefined): string | null => {
   const key = String(block ?? '').trim().toUpperCase();
   if (!key) return null;
-  if (CEFR_BLOCK_TITLES[key]) return CEFR_BLOCK_TITLES[key];
+  if (CEFR_BLOCK_TITLES[key]) return decodeMojibakeIfNeeded(CEFR_BLOCK_TITLES[key]);
   const match = key.match(/^([A-Z]\d)_(\d+)$/);
   if (!match) return null;
-  return `Р‘Р»РѕРє ${match[1]}-${match[2]}`;
+  return `Блок ${match[1]}-${match[2]}`;
 };
 
 const parseBlockOrder = (block: string | null | undefined): number => {
@@ -2536,12 +2546,12 @@ const buildSessionFlowState = async (
   `);
 
   const stages: SessionFlowStage[] = [
-    { key: 'intro', label: 'Р—РЅР°РєРѕРјСЃС‚РІРѕ', total: 0, completed: 0 },
-    { key: 'recognition', label: 'РЈР·РЅР°РІР°РЅРёРµ', total: 0, completed: 0 },
-    { key: 'matching', label: 'РЎРѕРїРѕСЃС‚Р°РІР»РµРЅРёРµ', total: 0, completed: 0 },
-    { key: 'deep_work', label: 'РљРѕРЅС‚РµРєСЃС‚ Рё Р°СѓРґРёСЂРѕРІР°РЅРёРµ', total: 0, completed: 0 },
-    { key: 'retry', label: 'Р—Р°РєСЂРµРїР»СЏРµРј РѕС€РёР±РєРё', total: 0, completed: 0 },
-    { key: 'result', label: 'Р РµР·СѓР»СЊС‚Р°С‚', total: 1, completed: isCompleted ? 1 : 0 },
+    { key: 'intro', label: decodeMojibakeIfNeeded('Р—РЅР°РєРѕРјСЃС‚РІРѕ'), total: 0, completed: 0 },
+    { key: 'recognition', label: decodeMojibakeIfNeeded('РЈР·РЅР°РІР°РЅРёРµ'), total: 0, completed: 0 },
+    { key: 'matching', label: decodeMojibakeIfNeeded('РЎРѕРїРѕСЃС‚Р°РІР»РµРЅРёРµ'), total: 0, completed: 0 },
+    { key: 'deep_work', label: decodeMojibakeIfNeeded('РљРѕРЅС‚РµРєСЃС‚ Рё Р°СѓРґРёСЂРѕРІР°РЅРёРµ'), total: 0, completed: 0 },
+    { key: 'retry', label: decodeMojibakeIfNeeded('Р—Р°РєСЂРµРїР»СЏРµРј РѕС€РёР±РєРё'), total: 0, completed: 0 },
+    { key: 'result', label: decodeMojibakeIfNeeded('Р РµР·СѓР»СЊС‚Р°С‚'), total: 1, completed: isCompleted ? 1 : 0 },
   ];
 
   const byKey = new Map<SessionFlowStageKey, SessionFlowStage>(stages.map((stage) => [stage.key, stage]));
@@ -2730,7 +2740,7 @@ const buildSessionState = async (session: SessionRow) => {
     introQueue: await getIntroQueue(fresh.id),
     sessionFlow,
     retryPhase: retryPhaseActive,
-    retryPhaseTitle: retryPhaseActive ? 'Р—Р°РєСЂРµРїР»СЏРµРј РѕС€РёР±РєРё' : null,
+    retryPhaseTitle: retryPhaseActive ? decodeMojibakeIfNeeded('Р—Р°РєСЂРµРїР»СЏРµРј РѕС€РёР±РєРё') : null,
   };
 };
 
