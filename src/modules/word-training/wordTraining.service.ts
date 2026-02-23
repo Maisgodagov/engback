@@ -754,10 +754,21 @@ const parsePrimaryFromYandex = (
   lang: string,
   response: unknown,
 ): { word: string; translation: string } | null => {
+  const normalizedResponse: YandexDictResponse =
+    typeof response === 'string'
+      ? (() => {
+          try {
+            return JSON.parse(response) as YandexDictResponse;
+          } catch {
+            return { def: [] };
+          }
+        })()
+      : ((response ?? {}) as YandexDictResponse);
+
   const entries = buildYandexEntries(
     query,
     lang === 'ru' ? 'ru' : 'en',
-    response as YandexDictResponse,
+    normalizedResponse,
   );
   if (!entries.length) return null;
   const primary = entries[0];
