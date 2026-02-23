@@ -275,57 +275,58 @@ const SOURCE_LIMIT = 500;
 const MAX_RETRY_ATTEMPTS = 2;
 const CEFR_LEVELS: Array<'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2'> = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 const CEFR_BLOCK_TITLES: Record<string, string> = {
-  A1_1: 'РЎС‚Р°СЂС‚РѕРІС‹Р№ РЅР°Р±РѕСЂ I',
-  A1_2: 'РЎС‚Р°СЂС‚РѕРІС‹Р№ РЅР°Р±РѕСЂ II',
-  A1_3: 'РЎС‚Р°СЂС‚РѕРІС‹Р№ РЅР°Р±РѕСЂ III',
-  A1_4: 'Р‘Р°Р·РѕРІС‹Р№ Р°РєС‚РёРІ I',
-  A1_5: 'Р‘Р°Р·РѕРІС‹Р№ Р°РєС‚РёРІ II',
-  A1_6: 'Р‘Р°Р·РѕРІС‹Р№ Р°РєС‚РёРІ III',
-  A1_7: 'Р—Р°РІРµСЂС€РµРЅРёРµ С„СѓРЅРґР°РјРµРЅС‚Р° I',
-  A1_8: 'Р—Р°РІРµСЂС€РµРЅРёРµ С„СѓРЅРґР°РјРµРЅС‚Р° II',
-  A1_9: 'Р—Р°РІРµСЂС€РµРЅРёРµ С„СѓРЅРґР°РјРµРЅС‚Р° III',
+  A1_1: 'Стартовый набор I',
+  A1_2: 'Стартовый набор II',
+  A1_3: 'Стартовый набор III',
+  A1_4: 'Базовый актив I',
+  A1_5: 'Базовый актив II',
+  A1_6: 'Базовый актив III',
+  A1_7: 'Завершение фундамента I',
+  A1_8: 'Завершение фундамента II',
+  A1_9: 'Завершение фундамента III',
 
-  A2_1: 'Р‘С‹С‚РѕРІРѕР№ РјРёРЅРёРјСѓРј I',
-  A2_2: 'Р‘С‹С‚РѕРІРѕР№ РјРёРЅРёРјСѓРј II',
-  A2_3: 'Р‘С‹С‚РѕРІРѕР№ РјРёРЅРёРјСѓРј III',
-  A2_4: 'Р Р°СЃС€РёСЂРµРЅРёРµ СЃР»РѕРІР°СЂСЏ I',
-  A2_5: 'Р Р°СЃС€РёСЂРµРЅРёРµ СЃР»РѕРІР°СЂСЏ II',
-  A2_6: 'Р Р°СЃС€РёСЂРµРЅРёРµ СЃР»РѕРІР°СЂСЏ III',
-  A2_7: 'РЈРІРµСЂРµРЅРЅС‹Р№ РґРёР°Р»РѕРі I',
-  A2_8: 'РЈРІРµСЂРµРЅРЅС‹Р№ РґРёР°Р»РѕРі II',
-  A2_9: 'РЈРІРµСЂРµРЅРЅС‹Р№ РґРёР°Р»РѕРі II',
+  A2_1: 'Бытовой минимум I',
+  A2_2: 'Бытовой минимум II',
+  A2_3: 'Бытовой минимум III',
+  A2_4: 'Расширение словаря I',
+  A2_5: 'Расширение словаря II',
+  A2_6: 'Расширение словаря III',
+  A2_7: 'Уверенный диалог I',
+  A2_8: 'Уверенный диалог II',
+  A2_9: 'Уверенный диалог III',
 
-  B1_1: 'РЎРІРѕР±РѕРґРЅС‹Р№ РІС‹Р±РѕСЂ I',
-  B1_2: 'РЎРІРѕР±РѕРґРЅС‹Р№ РІС‹Р±РѕСЂ II',
-  B1_3: 'РЎРІРѕР±РѕРґРЅС‹Р№ РІС‹Р±РѕСЂ III',
-  B1_4: 'РћСЃРЅРѕРІР° РїРѕРЅРёРјР°РЅРёСЏ I',
-  B1_5: 'РћСЃРЅРѕРІР° РїРѕРЅРёРјР°РЅРёСЏ II',
-  B1_6: 'РћСЃРЅРѕРІР° РїРѕРЅРёРјР°РЅРёСЏ III',
-  B1_7: 'РџРѕСЂРѕРіРѕРІС‹Р№ СѓСЂРѕРІРµРЅСЊ (Р­РєРІР°С‚РѕСЂ)',
-  B1_8: 'РџРѕСЂРѕРіРѕРІС‹Р№ СѓСЂРѕРІРµРЅСЊ (Р­РєРІР°С‚РѕСЂ)',
+  B1_1: 'Свободный выбор I',
+  B1_2: 'Свободный выбор II',
+  B1_3: 'Свободный выбор III',
+  B1_4: 'Основа понимания I',
+  B1_5: 'Основа понимания II',
+  B1_6: 'Основа понимания III',
+  B1_7: 'Пороговый уровень (Экватор)',
+  B1_8: 'Пороговый уровень (Экватор)',
 
-  B2_1: 'РђРєС†РµРЅС‚ РЅР° РґРµС‚Р°Р»СЏС… I',
-  B2_2: 'РђРєС†РµРЅС‚ РЅР° РґРµС‚Р°Р»СЏС… II',
-  B2_3: 'РђРєС†РµРЅС‚ РЅР° РґРµС‚Р°Р»СЏС… III',
-  B2_4: 'РњР°СЃС‚РµСЂСЃС‚РІРѕ РєРѕРЅС‚РµРєСЃС‚Р° I',
-  B2_5: 'РњР°СЃС‚РµСЂСЃС‚РІРѕ РєРѕРЅС‚РµРєСЃС‚Р° II',
-  B2_6: 'РњР°СЃС‚РµСЂСЃС‚РІРѕ РєРѕРЅС‚РµРєСЃС‚Р° III',
-  B2_7: 'РџСЂРѕРґРІРёРЅСѓС‚С‹Р№ РІРѕРєР°Р±СѓР»СЏСЂ I',
-  B2_8: 'РџСЂРѕРґРІРёРЅСѓС‚С‹Р№ РІРѕРєР°Р±СѓР»СЏСЂ II',
-  B2_9: 'РџСЂРѕРґРІРёРЅСѓС‚С‹Р№ РІРѕРєР°Р±СѓР»СЏСЂ III',
-  B2_10: 'РџСЂРѕРґРІРёРЅСѓС‚С‹Р№ РІРѕРєР°Р±СѓР»СЏСЂ IV',
-  B2_11: 'РџСЂРѕРґРІРёРЅСѓС‚С‹Р№ РІРѕРєР°Р±СѓР»СЏСЂ V',
-  B2_12: 'РџСЂРѕРґРІРёРЅСѓС‚С‹Р№ РІРѕРєР°Р±СѓР»СЏСЂ VI',
+  B2_1: 'Акцент на деталях I',
+  B2_2: 'Акцент на деталях II',
+  B2_3: 'Акцент на деталях III',
+  B2_4: 'Мастерство контекста I',
+  B2_5: 'Мастерство контекста II',
+  B2_6: 'Мастерство контекста III',
+  B2_7: 'Продвинутый вокабуляр I',
+  B2_8: 'Продвинутый вокабуляр II',
+  B2_9: 'Продвинутый вокабуляр III',
+  B2_10: 'Продвинутый вокабуляр IV',
+  B2_11: 'Продвинутый вокабуляр V',
+  B2_12: 'Продвинутый вокабуляр VI',
 
-  C1_1: 'РРЅС‚РµР»Р»РµРєС‚СѓР°Р»СЊРЅС‹Р№ Р·Р°РїР°СЃ I',
-  C1_2: 'РРЅС‚РµР»Р»РµРєС‚СѓР°Р»СЊРЅС‹Р№ Р·Р°РїР°СЃ II',
-  C1_3: 'РРЅС‚РµР»Р»РµРєС‚СѓР°Р»СЊРЅС‹Р№ Р·Р°РїР°СЃ III',
-  C1_4: 'РЎРјС‹СЃР»РѕРІС‹Рµ РЅСЋР°РЅСЃС‹ I',
-  C1_5: 'РЎРјС‹СЃР»РѕРІС‹Рµ РЅСЋР°РЅСЃС‹ II',
-  C1_6: 'РЎРјС‹СЃР»РѕРІС‹Рµ РЅСЋР°РЅСЃС‹ III',
-  C1_7: 'Р’РµСЂС€РёРЅР° РјР°СЃС‚РµСЂСЃС‚РІР° (Native Level)',
-  C1_8: 'Р’РµСЂС€РёРЅР° РјР°СЃС‚РµСЂСЃС‚РІР° (Native Level)',
+  C1_1: 'Интеллектуальный запас I',
+  C1_2: 'Интеллектуальный запас II',
+  C1_3: 'Интеллектуальный запас III',
+  C1_4: 'Смысловые нюансы I',
+  C1_5: 'Смысловые нюансы II',
+  C1_6: 'Смысловые нюансы III',
+  C1_7: 'Вершина мастерства (Native Level)',
+  C1_8: 'Вершина мастерства (Native Level)',
 };
+
 let tablesReady = false;
 
 const clamp = (value: number, min: number, max: number): number =>
@@ -341,17 +342,6 @@ const normalizeWord = (value: string): string =>
     .trim();
 
 const normalizeText = (value: string): string => value.trim().replace(/\s+/g, ' ');
-const decodeMojibakeIfNeeded = (value: string): string => {
-  const raw = String(value ?? '');
-  if (!raw) return raw;
-  // Heuristic: common mojibake pattern when UTF-8 text was decoded as Latin-1/CP1251.
-  if (!/[РЎЃ]/.test(raw)) return raw;
-  try {
-    return Buffer.from(raw, 'latin1').toString('utf8');
-  } catch {
-    return raw;
-  }
-};
 const normalizeCefrLevel = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim().toUpperCase();
   return CEFR_LEVELS.includes(normalized as (typeof CEFR_LEVELS)[number]) ? normalized : null;
@@ -359,7 +349,7 @@ const normalizeCefrLevel = (value: string | null | undefined): string | null => 
 const getCefrBlockTitle = (block: string | null | undefined): string | null => {
   const key = String(block ?? '').trim().toUpperCase();
   if (!key) return null;
-  if (CEFR_BLOCK_TITLES[key]) return decodeMojibakeIfNeeded(CEFR_BLOCK_TITLES[key]);
+  if (CEFR_BLOCK_TITLES[key]) return CEFR_BLOCK_TITLES[key];
   const match = key.match(/^([A-Z]\d)_(\d+)$/);
   if (!match) return null;
   return `Блок ${match[1]}-${match[2]}`;
@@ -1008,6 +998,7 @@ const loadProgress = async (userId: string, currentBlock?: string | null): Promi
             )`
           : Prisma.empty
       }
+      AND p.status <> 'mastered'
       AND COALESCE(uwp.status, 'new') NOT IN ('known', 'ignored')
       AND ex.word_id IS NULL
   `);
@@ -1065,11 +1056,24 @@ const getBlockCompletion = async (
   const [row] = await prisma.$queryRaw<Array<{ totalWords: bigint; knownWords: bigint }>>(Prisma.sql`
     SELECT
       COUNT(*) AS totalWords,
-      SUM(CASE WHEN uwp.status IN ('known', 'ignored') THEN 1 ELSE 0 END) AS knownWords
+      SUM(
+        CASE
+          WHEN uwp.status IN ('known', 'ignored') OR COALESCE(wp.isMastered, 0) = 1 THEN 1
+          ELSE 0
+        END
+      ) AS knownWords
     FROM yandex_dictionary_cache ydc
     LEFT JOIN user_word_progress uwp
       ON uwp.word_id = ydc.id
       AND uwp.user_id = ${userId}
+    LEFT JOIN (
+      SELECT
+        yandex_cache_id AS yandexCacheId,
+        MAX(CASE WHEN status = 'mastered' THEN 1 ELSE 0 END) AS isMastered
+      FROM word_training_progress
+      WHERE user_id = ${userId}
+      GROUP BY yandex_cache_id
+    ) wp ON wp.yandexCacheId = ydc.id
     WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
       AND (
         ydc.cefr_block = ${block}
@@ -1093,11 +1097,24 @@ const getBlockCompletionMap = async (
     SELECT
       COALESCE(ydc.cefr_block, CONCAT(ydc.cefr_level, '_1')) AS block,
       COUNT(*) AS totalWords,
-      SUM(CASE WHEN uwp.status IN ('known', 'ignored') THEN 1 ELSE 0 END) AS knownWords
+      SUM(
+        CASE
+          WHEN uwp.status IN ('known', 'ignored') OR COALESCE(wp.isMastered, 0) = 1 THEN 1
+          ELSE 0
+        END
+      ) AS knownWords
     FROM yandex_dictionary_cache ydc
     LEFT JOIN user_word_progress uwp
       ON uwp.word_id = ydc.id
       AND uwp.user_id = ${userId}
+    LEFT JOIN (
+      SELECT
+        yandex_cache_id AS yandexCacheId,
+        MAX(CASE WHEN status = 'mastered' THEN 1 ELSE 0 END) AS isMastered
+      FROM word_training_progress
+      WHERE user_id = ${userId}
+      GROUP BY yandex_cache_id
+    ) wp ON wp.yandexCacheId = ydc.id
     WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
       AND ydc.cefr_level IN ('A1','A2','B1','B2','C1','C2')
     GROUP BY COALESCE(ydc.cefr_block, CONCAT(ydc.cefr_level, '_1'))
@@ -2546,12 +2563,12 @@ const buildSessionFlowState = async (
   `);
 
   const stages: SessionFlowStage[] = [
-    { key: 'intro', label: decodeMojibakeIfNeeded('Р—РЅР°РєРѕРјСЃС‚РІРѕ'), total: 0, completed: 0 },
-    { key: 'recognition', label: decodeMojibakeIfNeeded('РЈР·РЅР°РІР°РЅРёРµ'), total: 0, completed: 0 },
-    { key: 'matching', label: decodeMojibakeIfNeeded('РЎРѕРїРѕСЃС‚Р°РІР»РµРЅРёРµ'), total: 0, completed: 0 },
-    { key: 'deep_work', label: decodeMojibakeIfNeeded('РљРѕРЅС‚РµРєСЃС‚ Рё Р°СѓРґРёСЂРѕРІР°РЅРёРµ'), total: 0, completed: 0 },
-    { key: 'retry', label: decodeMojibakeIfNeeded('Р—Р°РєСЂРµРїР»СЏРµРј РѕС€РёР±РєРё'), total: 0, completed: 0 },
-    { key: 'result', label: decodeMojibakeIfNeeded('Р РµР·СѓР»СЊС‚Р°С‚'), total: 1, completed: isCompleted ? 1 : 0 },
+    { key: 'intro', label: 'Знакомство', total: 0, completed: 0 },
+    { key: 'recognition', label: 'Узнавание', total: 0, completed: 0 },
+    { key: 'matching', label: 'Сопоставление', total: 0, completed: 0 },
+    { key: 'deep_work', label: 'Контекст и аудирование', total: 0, completed: 0 },
+    { key: 'retry', label: 'Закрепляем ошибки', total: 0, completed: 0 },
+    { key: 'result', label: 'Результат', total: 1, completed: isCompleted ? 1 : 0 },
   ];
 
   const byKey = new Map<SessionFlowStageKey, SessionFlowStage>(stages.map((stage) => [stage.key, stage]));
@@ -2740,7 +2757,7 @@ const buildSessionState = async (session: SessionRow) => {
     introQueue: await getIntroQueue(fresh.id),
     sessionFlow,
     retryPhase: retryPhaseActive,
-    retryPhaseTitle: retryPhaseActive ? decodeMojibakeIfNeeded('Р—Р°РєСЂРµРїР»СЏРµРј РѕС€РёР±РєРё') : null,
+    retryPhaseTitle: retryPhaseActive ? 'Закрепляем ошибки' : null,
   };
 };
 
@@ -3579,12 +3596,13 @@ const markWordKnown = async (
       `);
     }
 
-    if (wordRow.yandexCacheId) {
+    const knownWordId = Number(wordRow.yandexCacheId ?? progress?.yandex_cache_id ?? 0);
+    if (Number.isFinite(knownWordId) && knownWordId > 0) {
       await tx.$executeRaw(Prisma.sql`
         INSERT INTO user_word_progress (user_id, word_id, status, touches_total, touches_correct, streak, added_to_vocab)
         VALUES (
           ${userId},
-          ${wordRow.yandexCacheId},
+          ${knownWordId},
           'known',
           ${TOUCH_GOAL},
           ${TOUCH_GOAL},
@@ -3690,9 +3708,9 @@ const finishSession = async (userId: string, sessionId: string, force = false) =
   if (!force) {
     const pending = await getSessionPendingCount(sessionId);
     if (pending > 0 && session.energy_left > 0) {
-      throw Object.assign(new Error('Session has pending tasks. Use force=true to finish early.'), {
-        status: 400,
-      });
+      throw Object.assign(new Error('Нет слов для тренировки. Добавьте слова в словарь или откройте переводы в видео.'), {
+      status: 400,
+    });
     }
   }
 
@@ -4025,7 +4043,7 @@ const getWordMasteryMap = async (userId: string) => {
       ydc.cefr_level AS cefrLevel,
       ydc.cefr_block AS cefrBlock,
       CASE
-        WHEN uwp.status IN ('known', 'ignored') THEN 'known'
+        WHEN uwp.status IN ('known', 'ignored') OR COALESCE(wp.isMastered, 0) = 1 THEN 'known'
         WHEN uwp.status IN ('learning', 'viewed') THEN 'learning'
         ELSE 'new'
       END AS mastery
@@ -4033,6 +4051,14 @@ const getWordMasteryMap = async (userId: string) => {
     LEFT JOIN user_word_progress uwp
       ON uwp.word_id = ydc.id
       AND uwp.user_id = ${userId}
+    LEFT JOIN (
+      SELECT
+        yandex_cache_id AS yandexCacheId,
+        MAX(CASE WHEN status = 'mastered' THEN 1 ELSE 0 END) AS isMastered
+      FROM word_training_progress
+      WHERE user_id = ${userId}
+      GROUP BY yandex_cache_id
+    ) wp ON wp.yandexCacheId = ydc.id
     WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
       AND ydc.cefr_level IN ('A1', 'A2', 'B1', 'B2', 'C1', 'C2')
     ORDER BY FIELD(ydc.cefr_level, 'A1', 'A2', 'B1', 'B2', 'C1', 'C2'),
@@ -4047,7 +4073,7 @@ const getWordMasteryMap = async (userId: string) => {
       ydc.cefr_level AS cefrLevel,
       NULL AS cefrBlock,
       CASE
-        WHEN uwp.status IN ('known', 'ignored') THEN 'known'
+        WHEN uwp.status IN ('known', 'ignored') OR COALESCE(wp.isMastered, 0) = 1 THEN 'known'
         WHEN uwp.status IN ('learning', 'viewed') THEN 'learning'
         ELSE 'new'
       END AS mastery
@@ -4055,6 +4081,14 @@ const getWordMasteryMap = async (userId: string) => {
     LEFT JOIN user_word_progress uwp
       ON uwp.word_id = ydc.id
       AND uwp.user_id = ${userId}
+    LEFT JOIN (
+      SELECT
+        yandex_cache_id AS yandexCacheId,
+        MAX(CASE WHEN status = 'mastered' THEN 1 ELSE 0 END) AS isMastered
+      FROM word_training_progress
+      WHERE user_id = ${userId}
+      GROUP BY yandex_cache_id
+    ) wp ON wp.yandexCacheId = ydc.id
     WHERE LOWER(ydc.lang) REGEXP '^en([_-].+)?$'
       AND ydc.cefr_level IN ('A1', 'A2', 'B1', 'B2', 'C1', 'C2')
     ORDER BY FIELD(ydc.cefr_level, 'A1', 'A2', 'B1', 'B2', 'C1', 'C2'), ydc.query ASC, ydc.id ASC
