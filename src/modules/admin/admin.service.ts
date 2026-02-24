@@ -104,20 +104,20 @@ export const adminService = {
     const offset = (safePage - 1) * safeLimit;
 
     await ensureStreakTable();
-
     const normalizedSearch = String(search ?? '').trim().toLowerCase();
     const whereClause = normalizedSearch
       ? Prisma.sql`WHERE LOWER(u.fullName) LIKE ${`%${normalizedSearch}%`} OR LOWER(u.email) LIKE ${`%${normalizedSearch}%`}`
       : Prisma.empty;
 
-    const [countResult] = await prisma.$queryRaw<{ total: bigint }[]>(Prisma.sql`
-      SELECT COUNT(*) as total
-      FROM users u
-      ${whereClause}
-    `);
-    const total = Number(countResult?.total ?? 0);
+    try {
+      const [countResult] = await prisma.$queryRaw<{ total: bigint }[]>(Prisma.sql`
+        SELECT COUNT(*) as total
+        FROM users u
+        ${whereClause}
+      `);
+      const total = Number(countResult?.total ?? 0);
 
-    const [summaryRow] = await prisma.$queryRaw<AdminUsersSummaryRow[]>(Prisma.sql`
+      const [summaryRow] = await prisma.$queryRaw<AdminUsersSummaryRow[]>(Prisma.sql`
       SELECT
         COUNT(*) AS totalUsers,
         SUM(
@@ -188,9 +188,9 @@ export const adminService = {
           GROUP BY user_id
         ) wts ON wts.user_id = u.id
       ) activity
-    `);
+      `);
 
-    const items = await prisma.$queryRaw<AdminUserRow[]>(Prisma.sql`
+      const items = await prisma.$queryRaw<AdminUserRow[]>(Prisma.sql`
       SELECT
         u.id,
         u.email,
@@ -257,33 +257,116 @@ export const adminService = {
       ${whereClause}
       ORDER BY lastSeenAt DESC, u.createdAt DESC
       LIMIT ${safeLimit} OFFSET ${offset}
-    `);
+      `);
 
-    return {
-      items: items.map((row) => ({
-        id: row.id,
-        email: row.email,
-        fullName: row.fullName,
-        role: row.role,
-        avatarUrl: row.avatarUrl ?? undefined,
-        watchedCount: Number(row.watchedCount ?? 0),
-        likedCount: Number(row.likedCount ?? 0),
-        dictionaryWordsCount: Number(row.dictionaryWordsCount ?? 0),
-        exercisesCompletedCount: Number(row.exercisesCompletedCount ?? 0),
-        learnedWordsCount: Number(row.learnedWordsCount ?? 0),
-        currentStreakDays: Number(row.currentStreakDays ?? 0),
-        lastSeenAt: row.lastSeenAt ? row.lastSeenAt.toISOString() : null,
-      })),
-      summary: {
-        totalUsers: Number(summaryRow?.totalUsers ?? total),
-        activeToday: Number(summaryRow?.activeToday ?? 0),
-        activeWeek: Number(summaryRow?.activeWeek ?? 0),
-        activeMonth: Number(summaryRow?.activeMonth ?? 0),
-      },
-      total,
-      page: safePage,
-      totalPages: Math.ceil(total / safeLimit),
-    };
+      return {
+        items: items.map((row) => ({
+          id: row.id,
+          email: row.email,
+          fullName: row.fullName,
+          role: row.role,
+          avatarUrl: row.avatarUrl ?? undefined,
+          watchedCount: Number(row.watchedCount ?? 0),
+          likedCount: Number(row.likedCount ?? 0),
+          dictionaryWordsCount: Number(row.dictionaryWordsCount ?? 0),
+          exercisesCompletedCount: Number(row.exercisesCompletedCount ?? 0),
+          learnedWordsCount: Number(row.learnedWordsCount ?? 0),
+          currentStreakDays: Number(row.currentStreakDays ?? 0),
+          lastSeenAt: row.lastSeenAt ? row.lastSeenAt.toISOString() : null,
+        })),
+        summary: {
+          totalUsers: Number(summaryRow?.totalUsers ?? total),
+          activeToday: Number(summaryRow?.activeToday ?? 0),
+          activeWeek: Number(summaryRow?.activeWeek ?? 0),
+          activeMonth: Number(summaryRow?.activeMonth ?? 0),
+        },
+        total,
+        page: safePage,
+        totalPages: Math.ceil(total / safeLimit),
+      };
+    } catch (error) {
+      console.error('[ADMIN] getUsers extended query failed, fallback to compatibility mode', error);
+
+      const [countResult] = await prisma.$queryRaw<{ total: bigint }[]>(Prisma.sql`
+        SELECT COUNT(*) as total
+        FROM users u
+        ${whereClause}
+      `);
+      const total = Number(countResult?.total ?? 0);
+
+      const items = await prisma.$queryRaw<AdminUserRow[]>(Prisma.sql`
+        SELECT
+          u.id,
+          u.email,
+          u.fullName,
+          u.role,
+          u.avatarUrl,
+          COALESCE(vlp.watchedCount, 0) as watchedCount,
+          COALESCE(vl.likedCount, 0) as likedCount,
+          COALESCE(uw.wordsCount, 0) as dictionaryWordsCount,
+          0 as exercisesCompletedCount,
+          0 as learnedWordsCount,
+          u.streakDays as currentStreakDays,
+          us.lastSeenAt as lastSeenAt
+        FROM users u
+        LEFT JOIN user_streaks us ON us.userId = u.id
+        LEFT JOIN (
+          SELECT user_id, COUNT(*) as watchedCount
+          FROM video_learning_progress
+          WHERE status IN ('WATCHED', 'COMPLETED')
+          GROUP BY user_id
+        ) vlp ON vlp.user_id = u.id
+        LEFT JOIN (
+          SELECT user_id, COUNT(*) as likedCount
+          FROM video_likes
+          GROUP BY user_id
+        ) vl ON vl.user_id = u.id
+        LEFT JOIN (
+          SELECT userId, COUNT(*) as wordsCount
+          FROM user_words
+          GROUP BY userId
+        ) uw ON uw.userId = u.id
+        ${whereClause}
+        ORDER BY u.createdAt DESC
+        LIMIT ${safeLimit} OFFSET ${offset}
+      `);
+
+      const [summaryRow] = await prisma.$queryRaw<AdminUsersSummaryRow[]>(Prisma.sql`
+        SELECT
+          COUNT(*) AS totalUsers,
+          SUM(CASE WHEN us.lastSeenAt IS NOT NULL AND DATE(us.lastSeenAt) = CURDATE() THEN 1 ELSE 0 END) AS activeToday,
+          SUM(CASE WHEN us.lastSeenAt IS NOT NULL AND DATE(us.lastSeenAt) >= DATE_SUB(CURDATE(), INTERVAL 6 DAY) THEN 1 ELSE 0 END) AS activeWeek,
+          SUM(CASE WHEN us.lastSeenAt IS NOT NULL AND DATE(us.lastSeenAt) >= DATE_SUB(CURDATE(), INTERVAL 29 DAY) THEN 1 ELSE 0 END) AS activeMonth
+        FROM users u
+        LEFT JOIN user_streaks us ON us.userId = u.id
+      `);
+
+      return {
+        items: items.map((row) => ({
+          id: row.id,
+          email: row.email,
+          fullName: row.fullName,
+          role: row.role,
+          avatarUrl: row.avatarUrl ?? undefined,
+          watchedCount: Number(row.watchedCount ?? 0),
+          likedCount: Number(row.likedCount ?? 0),
+          dictionaryWordsCount: Number(row.dictionaryWordsCount ?? 0),
+          exercisesCompletedCount: Number(row.exercisesCompletedCount ?? 0),
+          learnedWordsCount: Number(row.learnedWordsCount ?? 0),
+          currentStreakDays: Number(row.currentStreakDays ?? 0),
+          lastSeenAt: row.lastSeenAt ? row.lastSeenAt.toISOString() : null,
+        })),
+        summary: {
+          totalUsers: Number(summaryRow?.totalUsers ?? total),
+          activeToday: Number(summaryRow?.activeToday ?? 0),
+          activeWeek: Number(summaryRow?.activeWeek ?? 0),
+          activeMonth: Number(summaryRow?.activeMonth ?? 0),
+        },
+        total,
+        page: safePage,
+        totalPages: Math.ceil(total / safeLimit),
+      };
+    }
   },
 
   async getUserActivityByDay(userId: string, days: number): Promise<{
@@ -318,77 +401,137 @@ export const adminService = {
       throw Object.assign(new Error('User not found'), { status: 404 });
     }
 
-    const rows = await prisma.$queryRaw<DailyUserActivityRow[]>(Prisma.sql`
-      SELECT
-        daily.day,
-        SUM(daily.videosWatched) AS videosWatched,
-        SUM(daily.likesGiven) AS likesGiven,
-        SUM(daily.exercisesCompleted) AS exercisesCompleted,
-        SUM(daily.wordsAdded) AS wordsAdded,
-        SUM(daily.wordsSearched) AS wordsSearched,
-        SUM(daily.phrasesAdded) AS phrasesAdded
-      FROM (
-        SELECT DATE(vlp.updated_at) AS day, COUNT(DISTINCT vlp.content_id) AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
-        FROM video_learning_progress vlp
-        WHERE vlp.user_id = ${userId} AND vlp.status IN ('WATCHED', 'COMPLETED')
-        GROUP BY DATE(vlp.updated_at)
+    let rows: DailyUserActivityRow[] = [];
+    try {
+      rows = await prisma.$queryRaw<DailyUserActivityRow[]>(Prisma.sql`
+        SELECT
+          daily.day,
+          SUM(daily.videosWatched) AS videosWatched,
+          SUM(daily.likesGiven) AS likesGiven,
+          SUM(daily.exercisesCompleted) AS exercisesCompleted,
+          SUM(daily.wordsAdded) AS wordsAdded,
+          SUM(daily.wordsSearched) AS wordsSearched,
+          SUM(daily.phrasesAdded) AS phrasesAdded
+        FROM (
+          SELECT DATE(vlp.updated_at) AS day, COUNT(DISTINCT vlp.content_id) AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
+          FROM video_learning_progress vlp
+          WHERE vlp.user_id = ${userId} AND vlp.status IN ('WATCHED', 'COMPLETED')
+          GROUP BY DATE(vlp.updated_at)
 
-        UNION ALL
+          UNION ALL
 
-        SELECT DATE(vl.created_at) AS day, 0 AS videosWatched, COUNT(*) AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
-        FROM video_likes vl
-        WHERE vl.user_id = ${userId}
-        GROUP BY DATE(vl.created_at)
+          SELECT DATE(vl.created_at) AS day, 0 AS videosWatched, COUNT(*) AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
+          FROM video_likes vl
+          WHERE vl.user_id = ${userId}
+          GROUP BY DATE(vl.created_at)
 
-        UNION ALL
+          UNION ALL
 
-        SELECT DATE(wtsi.recognition_at) AS day, 0 AS videosWatched, 0 AS likesGiven, COUNT(*) AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
-        FROM word_training_session_items wtsi
-        INNER JOIN word_training_sessions wts ON wts.id = wtsi.session_id
-        WHERE wts.user_id = ${userId} AND wtsi.recognition_at IS NOT NULL
-        GROUP BY DATE(wtsi.recognition_at)
+          SELECT DATE(wtsi.recognition_at) AS day, 0 AS videosWatched, 0 AS likesGiven, COUNT(*) AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
+          FROM word_training_session_items wtsi
+          INNER JOIN word_training_sessions wts ON wts.id = wtsi.session_id
+          WHERE wts.user_id = ${userId} AND wtsi.recognition_at IS NOT NULL
+          GROUP BY DATE(wtsi.recognition_at)
 
-        UNION ALL
+          UNION ALL
 
-        SELECT DATE(wtsi.reinforcement_at) AS day, 0 AS videosWatched, 0 AS likesGiven, COUNT(*) AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
-        FROM word_training_session_items wtsi
-        INNER JOIN word_training_sessions wts ON wts.id = wtsi.session_id
-        WHERE wts.user_id = ${userId} AND wtsi.reinforcement_at IS NOT NULL
-        GROUP BY DATE(wtsi.reinforcement_at)
+          SELECT DATE(wtsi.reinforcement_at) AS day, 0 AS videosWatched, 0 AS likesGiven, COUNT(*) AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
+          FROM word_training_session_items wtsi
+          INNER JOIN word_training_sessions wts ON wts.id = wtsi.session_id
+          WHERE wts.user_id = ${userId} AND wtsi.reinforcement_at IS NOT NULL
+          GROUP BY DATE(wtsi.reinforcement_at)
 
-        UNION ALL
+          UNION ALL
 
-        SELECT DATE(uw.createdAt) AS day, 0 AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, COUNT(*) AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
-        FROM user_words uw
-        WHERE uw.userId = ${userId}
-        GROUP BY DATE(uw.createdAt)
+          SELECT DATE(uw.createdAt) AS day, 0 AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, COUNT(*) AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
+          FROM user_words uw
+          WHERE uw.userId = ${userId}
+          GROUP BY DATE(uw.createdAt)
 
-        UNION ALL
+          UNION ALL
 
-        SELECT DATE(up.createdAt) AS day, 0 AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, COUNT(*) AS phrasesAdded
-        FROM user_phrases up
-        WHERE up.userId = ${userId}
-        GROUP BY DATE(up.createdAt)
+          SELECT DATE(up.createdAt) AS day, 0 AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, COUNT(*) AS phrasesAdded
+          FROM user_phrases up
+          WHERE up.userId = ${userId}
+          GROUP BY DATE(up.createdAt)
 
-        UNION ALL
+          UNION ALL
 
-        SELECT DATE(udv.updated_at) AS day, 0 AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, COUNT(*) AS wordsSearched, 0 AS phrasesAdded
-        FROM user_dictionary_views udv
-        WHERE udv.user_id = ${userId}
-        GROUP BY DATE(udv.updated_at)
+          SELECT DATE(udv.updated_at) AS day, 0 AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, COUNT(*) AS wordsSearched, 0 AS phrasesAdded
+          FROM user_dictionary_views udv
+          WHERE udv.user_id = ${userId}
+          GROUP BY DATE(udv.updated_at)
 
-        UNION ALL
+          UNION ALL
 
-        SELECT DATE(us.lastSeenAt) AS day, 0 AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
-        FROM user_streaks us
-        WHERE us.userId = ${userId}
-        GROUP BY DATE(us.lastSeenAt)
-      ) daily
-      WHERE daily.day >= ${fromDate}
-      GROUP BY daily.day
-      ORDER BY daily.day DESC
-      LIMIT ${safeDays}
-    `);
+          SELECT DATE(us.lastSeenAt) AS day, 0 AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
+          FROM user_streaks us
+          WHERE us.userId = ${userId}
+          GROUP BY DATE(us.lastSeenAt)
+        ) daily
+        WHERE daily.day >= ${fromDate}
+        GROUP BY daily.day
+        ORDER BY daily.day DESC
+        LIMIT ${safeDays}
+      `);
+    } catch (error) {
+      console.error('[ADMIN] getUserActivityByDay extended query failed, fallback to compatibility mode', error);
+      rows = await prisma.$queryRaw<DailyUserActivityRow[]>(Prisma.sql`
+        SELECT
+          daily.day,
+          SUM(daily.videosWatched) AS videosWatched,
+          SUM(daily.likesGiven) AS likesGiven,
+          SUM(daily.exercisesCompleted) AS exercisesCompleted,
+          SUM(daily.wordsAdded) AS wordsAdded,
+          SUM(daily.wordsSearched) AS wordsSearched,
+          SUM(daily.phrasesAdded) AS phrasesAdded
+        FROM (
+          SELECT DATE(vlp.updated_at) AS day, COUNT(DISTINCT vlp.content_id) AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
+          FROM video_learning_progress vlp
+          WHERE vlp.user_id = ${userId} AND vlp.status IN ('WATCHED', 'COMPLETED')
+          GROUP BY DATE(vlp.updated_at)
+
+          UNION ALL
+
+          SELECT DATE(vl.created_at) AS day, 0 AS videosWatched, COUNT(*) AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
+          FROM video_likes vl
+          WHERE vl.user_id = ${userId}
+          GROUP BY DATE(vl.created_at)
+
+          UNION ALL
+
+          SELECT DATE(uw.createdAt) AS day, 0 AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, COUNT(*) AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
+          FROM user_words uw
+          WHERE uw.userId = ${userId}
+          GROUP BY DATE(uw.createdAt)
+
+          UNION ALL
+
+          SELECT DATE(up.createdAt) AS day, 0 AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, COUNT(*) AS phrasesAdded
+          FROM user_phrases up
+          WHERE up.userId = ${userId}
+          GROUP BY DATE(up.createdAt)
+
+          UNION ALL
+
+          SELECT DATE(udv.updated_at) AS day, 0 AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, COUNT(*) AS wordsSearched, 0 AS phrasesAdded
+          FROM user_dictionary_views udv
+          WHERE udv.user_id = ${userId}
+          GROUP BY DATE(udv.updated_at)
+
+          UNION ALL
+
+          SELECT DATE(us.lastSeenAt) AS day, 0 AS videosWatched, 0 AS likesGiven, 0 AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
+          FROM user_streaks us
+          WHERE us.userId = ${userId}
+          GROUP BY DATE(us.lastSeenAt)
+        ) daily
+        WHERE daily.day >= ${fromDate}
+        GROUP BY daily.day
+        ORDER BY daily.day DESC
+        LIMIT ${safeDays}
+      `);
+    }
 
     return {
       user: {
