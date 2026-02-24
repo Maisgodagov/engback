@@ -239,15 +239,15 @@ export const adminService = {
         FROM user_words
         GROUP BY userId
       ) uw ON uw.userId = u.id
-      LEFT JOIN (
-        SELECT
-          user_id,
-          SUM(COALESCE(touches_total, 0)) as totalTouches,
-          SUM(CASE WHEN status = 'known' THEN 1 ELSE 0 END) as learnedWords,
-          MAX(updated_at) as lastExerciseAt
-        FROM user_word_progress
-        GROUP BY user_id
-      ) up ON up.user_id = u.id
+        LEFT JOIN (
+          SELECT
+            user_id,
+            SUM(COALESCE(touches_total, 0)) as totalTouches,
+            SUM(CASE WHEN status = 'known' THEN 1 ELSE 0 END) as learnedWords,
+            MAX(updated_at) as lastExerciseAt
+          FROM user_word_progress
+          GROUP BY user_id
+        ) up ON up.user_id = u.id
       LEFT JOIN (
         SELECT user_id, MAX(updated_at) as lastSearchAt
         FROM user_dictionary_views
@@ -308,8 +308,8 @@ export const adminService = {
           COALESCE(vlp.watchedCount, 0) as watchedCount,
           COALESCE(vl.likedCount, 0) as likedCount,
           COALESCE(uw.wordsCount, 0) as dictionaryWordsCount,
-          0 as exercisesCompletedCount,
-          0 as learnedWordsCount,
+          COALESCE(up.totalTouches, 0) as exercisesCompletedCount,
+          COALESCE(up.learnedWords, 0) as learnedWordsCount,
           u.streakDays as currentStreakDays,
           us.lastSeenAt as lastSeenAt
         FROM users u
@@ -330,6 +330,14 @@ export const adminService = {
           FROM user_words
           GROUP BY userId
         ) uw ON uw.userId = u.id
+        LEFT JOIN (
+          SELECT
+            user_id,
+            SUM(COALESCE(touches_total, 0)) as totalTouches,
+            SUM(CASE WHEN status = 'known' THEN 1 ELSE 0 END) as learnedWords
+          FROM user_word_progress
+          GROUP BY user_id
+        ) up ON up.user_id = u.id
         ${whereClause}
         ORDER BY u.createdAt DESC
         LIMIT ${safeLimit} OFFSET ${offset}
@@ -431,19 +439,10 @@ export const adminService = {
 
           UNION ALL
 
-          SELECT DATE(wtsi.recognition_at) AS day, 0 AS videosWatched, 0 AS likesGiven, COUNT(*) AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
-          FROM word_training_session_items wtsi
-          INNER JOIN word_training_sessions wts ON wts.id = wtsi.session_id
-          WHERE wts.user_id = ${userId} AND wtsi.recognition_at IS NOT NULL
-          GROUP BY DATE(wtsi.recognition_at)
-
-          UNION ALL
-
-          SELECT DATE(wtsi.reinforcement_at) AS day, 0 AS videosWatched, 0 AS likesGiven, COUNT(*) AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
-          FROM word_training_session_items wtsi
-          INNER JOIN word_training_sessions wts ON wts.id = wtsi.session_id
-          WHERE wts.user_id = ${userId} AND wtsi.reinforcement_at IS NOT NULL
-          GROUP BY DATE(wtsi.reinforcement_at)
+          SELECT DATE(uwp.updated_at) AS day, 0 AS videosWatched, 0 AS likesGiven, SUM(COALESCE(uwp.touches_total, 0)) AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
+          FROM user_word_progress uwp
+          WHERE uwp.user_id = ${userId}
+          GROUP BY DATE(uwp.updated_at)
 
           UNION ALL
 
@@ -501,6 +500,13 @@ export const adminService = {
           FROM video_likes vl
           WHERE vl.user_id = ${userId}
           GROUP BY DATE(vl.created_at)
+
+          UNION ALL
+
+          SELECT DATE(uwp.updated_at) AS day, 0 AS videosWatched, 0 AS likesGiven, SUM(COALESCE(uwp.touches_total, 0)) AS exercisesCompleted, 0 AS wordsAdded, 0 AS wordsSearched, 0 AS phrasesAdded
+          FROM user_word_progress uwp
+          WHERE uwp.user_id = ${userId}
+          GROUP BY DATE(uwp.updated_at)
 
           UNION ALL
 
