@@ -115,6 +115,14 @@ type QueueDraftItem = {
   initialStage: number;
 };
 
+type PlannedSessionItem = {
+  item: QueueDraftItem;
+  phase: 'recognition' | 'reinforcement';
+  reinforcementType?: ExerciseType;
+  attemptCount?: number;
+  priorityScore: number;
+};
+
 type WordExample = {
   contentId: number;
   videoName: string;
@@ -1449,6 +1457,97 @@ const pickReplacementQueue = (
   return Array.from(picked.values());
 };
 
+const buildPlannedSessionItems = (
+  items: QueueDraftItem[],
+  phraseExercisesPerWord: number,
+  includeMatchPairs: boolean,
+): PlannedSessionItem[] => {
+  if (!items.length) return [];
+
+  const shuffledWords = shuffleArray([...items]);
+  const recognitionQueue = [...shuffledWords];
+  const recognizedWordKeys = new Set<string>();
+  const phraseByWord = new Map<
+    string,
+    Array<{
+      type: ExerciseType;
+      attemptCount: number;
+      priorityScore: number;
+    }>
+  >();
+
+  for (const item of shuffledWords) {
+    const rounds: Array<{ type: ExerciseType; attemptCount: number; priorityScore: number }> = [];
+    for (let round = 0; round < phraseExercisesPerWord; round += 1) {
+      rounds.push({
+        type: pickPhraseReinforcementType(item.wordKey, item.priorityScore + round + 1),
+        attemptCount: round,
+        priorityScore: item.priorityScore + 1 + round,
+      });
+    }
+    phraseByWord.set(item.wordKey, rounds);
+  }
+
+  const plan: PlannedSessionItem[] = [];
+
+  const hasPendingPhrases = () =>
+    Array.from(phraseByWord.values()).some((list) => list.length > 0);
+
+  while (recognitionQueue.length > 0 || hasPendingPhrases()) {
+    const availablePhraseWords = shuffledWords.filter(
+      (word) => recognizedWordKeys.has(word.wordKey) && (phraseByWord.get(word.wordKey)?.length ?? 0) > 0,
+    );
+    const shouldTakeRecognition =
+      recognitionQueue.length > 0 &&
+      (availablePhraseWords.length === 0 || Math.random() < 0.65);
+
+    if (shouldTakeRecognition) {
+      const nextRecognition = recognitionQueue.shift();
+      if (!nextRecognition) continue;
+      plan.push({
+        item: nextRecognition,
+        phase: 'recognition',
+        priorityScore: nextRecognition.priorityScore,
+      });
+      recognizedWordKeys.add(nextRecognition.wordKey);
+      continue;
+    }
+
+    if (!availablePhraseWords.length) continue;
+    const phraseWord = shuffleArray(availablePhraseWords)[0];
+    const phraseQueue = phraseByWord.get(phraseWord.wordKey);
+    const phraseRound = phraseQueue?.shift();
+    if (!phraseRound) continue;
+
+    plan.push({
+      item: phraseWord,
+      phase: 'reinforcement',
+      reinforcementType: phraseRound.type,
+      attemptCount: phraseRound.attemptCount,
+      priorityScore: phraseRound.priorityScore,
+    });
+  }
+
+  if (includeMatchPairs && shuffledWords.length > 0) {
+    const anchor = shuffledWords[0];
+    const matchPairsItem: PlannedSessionItem = {
+      item: anchor,
+      phase: 'reinforcement',
+      reinforcementType: 'match_pairs',
+      attemptCount: 0,
+      priorityScore: anchor.priorityScore + 10,
+    };
+
+    if (plan.length <= 1) {
+      plan.push(matchPairsItem);
+    } else {
+      plan.splice(plan.length - 1, 0, matchPairsItem);
+    }
+  }
+
+  return plan;
+};
+
 const getActiveSession = async (userId: string): Promise<SessionRow | null> => {
   const [row] = await prisma.$queryRaw<SessionRow[]>(Prisma.sql`
     SELECT *
@@ -1491,47 +1590,10 @@ const appendQueueItemsToSession = async (
     WHERE session_id = ${session.id}
   `);
   let queueOrder = Number(maxOrderRow?.maxOrder ?? 0);
-
-  for (const item of items) {
+  const plan = buildPlannedSessionItems(items, session.phrase_exercises_per_word, false);
+  for (const planned of plan) {
     queueOrder += 1;
-    await tx.$executeRaw(Prisma.sql`
-      INSERT INTO word_training_session_items (
-        session_id,
-        queue_order,
-        word_key,
-        word,
-        translation,
-        source_type,
-        yandex_cache_id,
-        reason,
-        priority_score,
-        initial_status,
-        initial_stage,
-        phase,
-        state
-      )
-      VALUES (
-        ${session.id},
-        ${queueOrder},
-        ${item.wordKey},
-        ${item.word},
-        ${item.translation},
-        ${item.sourceType},
-        ${item.yandexCacheId},
-        ${item.reason},
-        ${item.priorityScore},
-        ${item.initialStatus},
-        ${item.initialStage},
-        'recognition',
-        'pending'
-      )
-    `);
-  }
-
-  for (const item of items) {
-    for (let round = 0; round < session.phrase_exercises_per_word; round += 1) {
-      const reinforcementType = pickPhraseReinforcementType(item.wordKey, item.priorityScore + round + 1);
-      queueOrder += 1;
+    if (planned.phase === 'recognition') {
       await tx.$executeRaw(Prisma.sql`
         INSERT INTO word_training_session_items (
           session_id,
@@ -1546,29 +1608,63 @@ const appendQueueItemsToSession = async (
           initial_status,
           initial_stage,
           phase,
-          state,
-          reinforcement_type,
-          attempt_count
+          state
         )
         VALUES (
           ${session.id},
           ${queueOrder},
-          ${item.wordKey},
-          ${item.word},
-          ${item.translation},
-          ${item.sourceType},
-          ${item.yandexCacheId},
-          ${item.reason},
-          ${item.priorityScore + 1 + round},
-          ${item.initialStatus},
-          ${item.initialStage},
-          'reinforcement',
-          'pending',
-          ${reinforcementType},
-          ${round}
+          ${planned.item.wordKey},
+          ${planned.item.word},
+          ${planned.item.translation},
+          ${planned.item.sourceType},
+          ${planned.item.yandexCacheId},
+          ${planned.item.reason},
+          ${planned.priorityScore},
+          ${planned.item.initialStatus},
+          ${planned.item.initialStage},
+          'recognition',
+          'pending'
         )
       `);
+      continue;
     }
+
+    await tx.$executeRaw(Prisma.sql`
+      INSERT INTO word_training_session_items (
+        session_id,
+        queue_order,
+        word_key,
+        word,
+        translation,
+        source_type,
+        yandex_cache_id,
+        reason,
+        priority_score,
+        initial_status,
+        initial_stage,
+        phase,
+        state,
+        reinforcement_type,
+        attempt_count
+      )
+      VALUES (
+        ${session.id},
+        ${queueOrder},
+        ${planned.item.wordKey},
+        ${planned.item.word},
+        ${planned.item.translation},
+        ${planned.item.sourceType},
+        ${planned.item.yandexCacheId},
+        ${planned.item.reason},
+        ${planned.priorityScore},
+        ${planned.item.initialStatus},
+        ${planned.item.initialStage},
+        'reinforcement',
+        'pending',
+        ${planned.reinforcementType ?? 'missing'},
+        ${planned.attemptCount ?? 0}
+      )
+    `);
   }
 
 };
@@ -3006,47 +3102,46 @@ const startSession = async (
       )
     `);
 
-    for (let i = 0; i < queueBuild.queue.length; i += 1) {
-      const item = queueBuild.queue[i];
-      await tx.$executeRaw(Prisma.sql`
-        INSERT INTO word_training_session_items (
-          session_id,
-          queue_order,
-          word_key,
-          word,
-          translation,
-          source_type,
-          yandex_cache_id,
-          reason,
-          priority_score,
-          initial_status,
-          initial_stage,
-          phase,
-          state
-        )
-        VALUES (
-          ${sessionId},
-          ${i + 1},
-          ${item.wordKey},
-          ${item.word},
-          ${item.translation},
-          ${item.sourceType},
-          ${item.yandexCacheId},
-          ${item.reason},
-          ${item.priorityScore},
-          ${item.initialStatus},
-          ${item.initialStage},
-          'recognition',
-          'pending'
-        )
-      `);
-    }
-
-    let queueOrder = queueBuild.queue.length;
-
-    if (queueBuild.queue.length > 0) {
-      const anchor = queueBuild.queue[0];
+    const plan = buildPlannedSessionItems(queueBuild.queue, phraseExercisesPerWord, true);
+    let queueOrder = 0;
+    for (const planned of plan) {
       queueOrder += 1;
+      if (planned.phase === 'recognition') {
+        await tx.$executeRaw(Prisma.sql`
+          INSERT INTO word_training_session_items (
+            session_id,
+            queue_order,
+            word_key,
+            word,
+            translation,
+            source_type,
+            yandex_cache_id,
+            reason,
+            priority_score,
+            initial_status,
+            initial_stage,
+            phase,
+            state
+          )
+          VALUES (
+            ${sessionId},
+            ${queueOrder},
+            ${planned.item.wordKey},
+            ${planned.item.word},
+            ${planned.item.translation},
+            ${planned.item.sourceType},
+            ${planned.item.yandexCacheId},
+            ${planned.item.reason},
+            ${planned.priorityScore},
+            ${planned.item.initialStatus},
+            ${planned.item.initialStage},
+            'recognition',
+            'pending'
+          )
+        `);
+        continue;
+      }
+
       await tx.$executeRaw(Prisma.sql`
         INSERT INTO word_training_session_items (
           session_id,
@@ -3068,64 +3163,21 @@ const startSession = async (
         VALUES (
           ${sessionId},
           ${queueOrder},
-          ${anchor.wordKey},
-          ${anchor.word},
-          ${anchor.translation},
-          ${anchor.sourceType},
-          ${anchor.yandexCacheId},
-          ${anchor.reason},
-          ${anchor.priorityScore + 10},
-          ${anchor.initialStatus},
-          ${anchor.initialStage},
+          ${planned.item.wordKey},
+          ${planned.item.word},
+          ${planned.item.translation},
+          ${planned.item.sourceType},
+          ${planned.item.yandexCacheId},
+          ${planned.item.reason},
+          ${planned.priorityScore},
+          ${planned.item.initialStatus},
+          ${planned.item.initialStage},
           'reinforcement',
           'pending',
-          'match_pairs',
-          0
+          ${planned.reinforcementType ?? 'missing'},
+          ${planned.attemptCount ?? 0}
         )
       `);
-    }
-
-    for (const item of queueBuild.queue) {
-      for (let round = 0; round < phraseExercisesPerWord; round += 1) {
-        const reinforcementType = pickPhraseReinforcementType(item.wordKey, item.priorityScore + round + 1);
-        queueOrder += 1;
-        await tx.$executeRaw(Prisma.sql`
-          INSERT INTO word_training_session_items (
-            session_id,
-            queue_order,
-            word_key,
-            word,
-            translation,
-            source_type,
-            yandex_cache_id,
-            reason,
-            priority_score,
-            initial_status,
-            initial_stage,
-            phase,
-            state,
-            reinforcement_type,
-            attempt_count
-          )
-          VALUES (
-            ${sessionId},
-            ${queueOrder},
-            ${item.wordKey},
-            ${item.word},
-            ${item.translation},
-            ${item.sourceType},
-            ${item.yandexCacheId},
-            ${item.reason},
-            ${item.priorityScore + 1 + round},
-            ${item.initialStatus},
-            ${item.initialStage},
-            'reinforcement',
-            'pending',
-            ${reinforcementType},
-            ${round}
-          )
-        `);
-      }
     }
   });
 
