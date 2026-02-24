@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import type { User } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 import type { AuthTokens, UserProfileDto } from '../../shared/types';
 import { UserRole } from '../../shared/types';
@@ -72,6 +73,33 @@ const ensureXpColumn = async () => {
   }
 };
 
+let streakTableChecked = false;
+
+const ensureStreakTable = async () => {
+  if (streakTableChecked) return;
+  await prisma.$executeRawUnsafe(
+    `CREATE TABLE IF NOT EXISTS user_streaks (
+      userId VARCHAR(191) PRIMARY KEY,
+      lastSeenAt DATETIME(3) NOT NULL,
+      updatedAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+    )`,
+  );
+  streakTableChecked = true;
+};
+
+const touchLastSeen = async (userId: string) => {
+  await ensureStreakTable();
+  const now = new Date();
+  await prisma.$executeRaw(
+    Prisma.sql`
+      INSERT INTO user_streaks (userId, lastSeenAt)
+      VALUES (${userId}, ${now})
+      ON DUPLICATE KEY UPDATE
+        lastSeenAt = VALUES(lastSeenAt)
+    `,
+  );
+};
+
 const mapToProfile = async (user: User): Promise<UserProfileDto> => {
   await ensureXpColumn();
   const [row] = (await prisma.$queryRawUnsafe<any[]>(`SELECT xpPoints FROM users WHERE id = ?`, user.id)) as Array<{
@@ -102,6 +130,7 @@ const login = async ({ email, password }: LoginInput) => {
     throw Object.assign(new Error('Invalid credentials'), { status: 401 });
   }
 
+  await touchLastSeen(existing.id);
   const profile = await mapToProfile(existing);
   return {
     tokens: createTokens(profile),
@@ -125,6 +154,7 @@ const register = async ({ email, fullName, role, password }: RegisterInput) => {
     },
   });
 
+  await touchLastSeen(user.id);
   const profile = await mapToProfile(user);
   return {
     tokens: createTokens(profile),
@@ -188,6 +218,7 @@ const telegramAuth = async ({ initData }: TelegramLoginInput) => {
     }
   }
 
+  await touchLastSeen(user.id);
   const profile = await mapToProfile(user);
   return {
     tokens: createTokens(profile),

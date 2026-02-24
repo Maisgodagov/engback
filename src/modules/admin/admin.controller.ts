@@ -7,12 +7,28 @@ export const adminController = {
     try {
       const page = parseInt(req.query.page as string) || 1;
       const limit = parseInt(req.query.limit as string) || 50;
+      const search = typeof req.query.search === 'string' ? req.query.search : undefined;
 
-      const result = await adminService.getUsers(page, limit);
+      const result = await adminService.getUsers(page, limit, search);
       res.json(result);
     } catch (error) {
       console.error('[ADMIN] Error getting users:', error);
       res.status(500).json({ error: 'Failed to get users' });
+    }
+  },
+
+  async getUserActivity(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      const daysRaw = parseInt(req.query.days as string, 10);
+      const days = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : 60;
+
+      const result = await adminService.getUserActivityByDay(id, days);
+      res.json(result);
+    } catch (error: any) {
+      const status = error?.status ?? 500;
+      console.error('[ADMIN] Error getting user activity:', error);
+      res.status(status).json({ error: error?.message ?? 'Failed to get user activity' });
     }
   },
 
