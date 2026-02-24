@@ -103,7 +103,11 @@ export const adminService = {
     const safePage = Math.max(page, 1);
     const offset = (safePage - 1) * safeLimit;
 
-    await ensureStreakTable();
+    try {
+      await ensureStreakTable();
+    } catch (error) {
+      console.warn('[ADMIN] ensureStreakTable skipped:', error);
+    }
     const normalizedSearch = String(search ?? '').trim().toLowerCase();
     const whereClause = normalizedSearch
       ? Prisma.sql`WHERE LOWER(u.fullName) LIKE ${`%${normalizedSearch}%`} OR LOWER(u.email) LIKE ${`%${normalizedSearch}%`}`

@@ -88,16 +88,20 @@ const ensureStreakTable = async () => {
 };
 
 const touchLastSeen = async (userId: string) => {
-  await ensureStreakTable();
-  const now = new Date();
-  await prisma.$executeRaw(
-    Prisma.sql`
-      INSERT INTO user_streaks (userId, lastSeenAt)
-      VALUES (${userId}, ${now})
-      ON DUPLICATE KEY UPDATE
-        lastSeenAt = VALUES(lastSeenAt)
-    `,
-  );
+  try {
+    await ensureStreakTable();
+    const now = new Date();
+    await prisma.$executeRaw(
+      Prisma.sql`
+        INSERT INTO user_streaks (userId, lastSeenAt)
+        VALUES (${userId}, ${now})
+        ON DUPLICATE KEY UPDATE
+          lastSeenAt = VALUES(lastSeenAt)
+      `,
+    );
+  } catch (error) {
+    console.warn('[AUTH] touchLastSeen skipped:', error);
+  }
 };
 
 const mapToProfile = async (user: User): Promise<UserProfileDto> => {
