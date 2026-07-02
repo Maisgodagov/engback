@@ -1316,106 +1316,26 @@ const computeRecommendationScores = async (
 const getFeed = async (
   userId: string,
   limit?: number,
-  cursor?: string | null,
-  cefrLevels?: string,
-  speechSpeeds?: string,
-  showAdultContent: boolean | undefined = true,
-  moderationFilter: ModerationFilter | undefined = "moderated",
-  isAdmin: boolean = false
+  cursor?: string | null
 ): Promise<{
   items: VideoFeedItem[];
   nextCursor: string | null;
   hasMore: boolean;
 }> => {
   const normalizedLimit = limit && limit > 0 ? limit : 1;
-  const parsedCursor = parseFeedCursor(cursor);
+  const trimmedCursor = cursor?.trim() ?? "";
+  const cursorId = Number(trimmedCursor.includes(":") ? trimmedCursor.split(":").pop() : trimmedCursor);
 
-  const userRoleIsAdmin = isAdmin;
-  const effectiveModerationFilter =
-    moderationFilter ?? (userRoleIsAdmin ? "all" : "all");
-
-  const baseWhere: Prisma.VideoLearningContentWhereInput = {};
-  if (cefrLevels) {
-    const levels = cefrLevels
-      .split(",")
-      .map((v) => v.trim().toUpperCase())
-      .filter(Boolean);
-    if (levels.length) {
-      baseWhere.cefrLevel = {
-        in: levels as VideoLearningContentCefrLevel[],
-      };
-    }
-  }
-  if (speechSpeeds) {
-    const speeds = speechSpeeds
-      .split(",")
-      .map((v) => v.trim().toLowerCase())
-      .filter(Boolean);
-    if (speeds.length) {
-      baseWhere.speechSpeed = {
-        in: speeds as VideoLearningContentSpeechSpeed[],
-      };
-    }
-  }
-  if (showAdultContent === false) {
-    baseWhere.isAdultContent = false;
-  }
-  if (effectiveModerationFilter === "moderated") {
-    baseWhere.isModerated = true;
-  } else if (effectiveModerationFilter === "unmoderated") {
-    baseWhere.isModerated = false;
-  }
-
-  const bucketKey = buildBucketKey({
-    cefrLevels,
-    speechSpeeds,
-    showAdultContent,
-    moderationFilter: effectiveModerationFilter,
-  });
-  await ensureFeedBucket(bucketKey, baseWhere);
-
-  const [likedRecords, topicPreferences, progressRecords, seenRecords] =
-    await Promise.all([
-      getCachedLikes(userId),
-      getCachedTopicPreferences(userId),
-      getCachedProgress(userId),
-      getCachedSeen(userId),
-    ]);
-
-  const likedSet = new Set(likedRecords.map((item) => item.contentId));
-  const statusMap = new Map(
-    progressRecords.map((p) => [p.contentId, p.status])
-  );
-  const seenSet = new Set(seenRecords.map((item) => item.contentId));
-
-  const topicScoreMap = new Map(
-    topicPreferences.map((item) => [item.topic, item.likes])
-  );
-
-  const batchSize = Math.max(normalizedLimit * FEED_BATCH_MULTIPLIER, 5);
-  let cursorState = parsedCursor;
-  const collected: Array<{
-    record: PoolRecord;
-    bucketScore: number;
-  }> = [];
-  let hasMore = false;
-  let scanned = 0;
-  const maxScan = Math.max(
-    FEED_MAX_SCAN_ITEMS,
-    normalizedLimit * FEED_BATCH_MULTIPLIER * FEED_MAX_FETCH_LOOPS
-  );
-
-  for (let loop = 0; loop < FEED_MAX_FETCH_LOOPS; loop += 1) {
-    const bucketItems = await loadBucketItems(bucketKey, cursorState, batchSize);
-    if (!bucketItems.length) {
-      hasMore = false;
-      break;
-    }
-    scanned += bucketItems.length;
-
-    const contentIds = bucketItems.map((item) => item.contentId);
-    const records = await prisma.videoLearningContent.findMany({
-      where: { id: { in: contentIds } },
+  const [likedRecords, progressRecords, records] = await Promise.all([
+    getCachedLikes(userId),
+    getCachedProgress(userId),
+    prisma.videoLearningContent.findMany({
+      where:
+        Number.isInteger(cursorId) && cursorId > 0
+          ? { id: { lt: cursorId } }
+          : {},
+      orderBy: { id: "desc" },
+      take: normalizedLimit + 1,
       select: {
         id: true,
         videoName: true,
@@ -1433,48 +1353,18 @@ const getFeed = async (
         vocabularyComplexity: true,
         videoTopics: { select: { topic: true } },
       },
-    });
-    const recordMap = new Map(records.map((record) => [record.id, record]));
+    }),
+  ]);
 
-    bucketItems.forEach((item) => {
-      const record = recordMap.get(item.contentId);
-      if (!record) return;
-      if (likedSet.has(record.id)) return;
-      if (seenSet.has(record.id)) return;
-      if (statusMap.get(record.id) === VideoLearningStatus.WATCHED) return;
-      collected.push({ record, bucketScore: item.score });
-    });
+  const likedSet = new Set(likedRecords.map((item) => item.contentId));
+  const statusMap = new Map(
+    progressRecords.map((p) => [p.contentId, p.status])
+  );
 
-    const last = bucketItems[bucketItems.length - 1];
-    cursorState = { score: last.score, id: last.contentId };
-    hasMore = bucketItems.length >= batchSize;
+  const selected = records.slice(0, normalizedLimit);
+  const hasMore = records.length > normalizedLimit;
 
-    if (collected.length >= normalizedLimit) break;
-    if (scanned >= maxScan) break;
-  }
-
-  if (!collected.length) {
-    return { items: [], nextCursor: formatFeedCursor(cursorState), hasMore };
-  }
-
-  const scored = collected.map(({ record, bucketScore }) => {
-    const topics = record.videoTopics.map((t) => t.topic);
-    const topicBoost = topics.reduce(
-      (sum, topic) => sum + (topicScoreMap.get(topic) ?? 0),
-      0
-    );
-    const likedBoost = likedSet.has(record.id) ? 20 : 0;
-    const personalBoost = Math.min(20, topicBoost * 0.5);
-    return {
-      record,
-      score: bucketScore + personalBoost + likedBoost,
-    };
-  });
-
-  scored.sort((a, b) => b.score - a.score);
-  const selected = scored.slice(0, normalizedLimit);
-
-  const items: VideoFeedItem[] = selected.map(({ record }) => {
+  const items: VideoFeedItem[] = selected.map((record) => {
     const analysis: AnalysisResult = {
       cefrLevel: (record.cefrLevel as AnalysisResult["cefrLevel"]) ?? "A1",
       speechSpeed:
@@ -1485,7 +1375,7 @@ const getFeed = async (
       vocabularyComplexity:
         (record.vocabularyComplexity as AnalysisResult["vocabularyComplexity"]) ??
         "basic",
-      topics: [],
+      topics: record.videoTopics.map((topic) => topic.topic),
     };
     return {
       id: record.id.toString(),
@@ -1503,9 +1393,11 @@ const getFeed = async (
       author: record.author ?? null,
     };
   });
+
+  const last = selected[selected.length - 1];
   return {
     items,
-    nextCursor: formatFeedCursor(cursorState),
+    nextCursor: hasMore && last ? String(last.id) : null,
     hasMore,
   };
 };

@@ -51,31 +51,12 @@ export const getFeed = async (req: Request, res: Response) => {
   // Parse pagination params
   const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 0;
   const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 20) : 1;
-  const cursor = req.query.cursor ? (req.query.cursor as string) : undefined;
-  const cefrLevels = req.query.cefrLevels ? (req.query.cefrLevels as string) : undefined;
-  const speechSpeeds = req.query.speechSpeeds ? (req.query.speechSpeeds as string) : undefined;
-  const showAdultContentParam =
-    typeof req.query.showAdultContent === 'string' ? (req.query.showAdultContent as string) : undefined;
-  const showAdultContent =
-    showAdultContentParam === undefined ? undefined : showAdultContentParam.toLowerCase() === 'true';
-  const moderationFilterParam =
-    typeof req.query.moderationFilter === 'string' ? (req.query.moderationFilter as string).toLowerCase() : undefined;
-  const moderationFilter =
-    moderationFilterParam && ['all', 'moderated', 'unmoderated'].includes(moderationFilterParam)
-      ? (moderationFilterParam as 'all' | 'moderated' | 'unmoderated')
-      : undefined;
-  const userRole = (req.header('x-user-role') ?? '').toLowerCase();
-  const isAdmin = userRole === 'admin';
+  const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
 
   const result = await videoLearningService.getFeed(
     userId,
     safeLimit,
     cursor,
-    cefrLevels,
-    speechSpeeds,
-    showAdultContent,
-    moderationFilter,
-    isAdmin,
   );
   res.json(result);
 };
